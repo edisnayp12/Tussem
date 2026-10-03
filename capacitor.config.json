@@ -1,0 +1,9 @@
+
+{
+  "appId": "com.tusemm.cantina",
+  "appName": "Cantina TUSEMM",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}

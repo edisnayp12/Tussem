@@ -1,0 +1,7 @@
+{
+  "name": "Cantina TUSEMM",
+  "description": "Sistema Profissional de Gestão de Vendas, Estoque e Fiados Maria Mulambo.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

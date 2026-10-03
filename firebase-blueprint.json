@@ -1,0 +1,93 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with roles and status",
+      "type": "object",
+      "properties": {
+        "nome": { "type": "string" },
+        "usuario": { "type": "string" },
+        "perfil": { "type": "string", "enum": ["admin", "comum"] },
+        "ativo": { "type": "boolean" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["nome", "usuario", "perfil", "ativo"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Inventory product item",
+      "type": "object",
+      "properties": {
+        "nome": { "type": "string" },
+        "descricao": { "type": "string" },
+        "preco": { "type": "number" },
+        "estoque": { "type": "number" },
+        "categoria": { "type": "string" },
+        "ativo": { "type": "boolean" },
+        "codigo": { "type": "string" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["nome", "preco", "estoque", "ativo"]
+    },
+    "Sale": {
+      "title": "Sale",
+      "description": "A completed or pending sale/pedido",
+      "type": "object",
+      "properties": {
+        "usuario_id": { "type": "string" },
+        "status": { "type": "string", "enum": ["pago", "pendente", "cancelado"] },
+        "valor_total": { "type": "number" },
+        "forma_pagamento": { "type": "string" },
+        "created_at": { "type": "string" },
+        "cliente_nome": { "type": "string" },
+        "pixInteractionId": { "type": "string" }
+      },
+      "required": ["status", "valor_total", "forma_pagamento", "created_at"]
+    },
+    "SaleItem": {
+      "title": "SaleItem",
+      "description": "Item belonging to a sale",
+      "type": "object",
+      "properties": {
+        "produto_id": { "type": "string" },
+        "nome": { "type": "string" },
+        "quantidade": { "type": "number" },
+        "preco_unitario": { "type": "number" },
+        "subtotal": { "type": "number" }
+      },
+      "required": ["produto_id", "quantidade", "preco_unitario", "subtotal"]
+    },
+    "Setting": {
+      "title": "Setting",
+      "description": "Global config and integrations",
+      "type": "object",
+      "properties": {
+        "cantinaName": { "type": "string" },
+        "mercadoPagoToken": { "type": "string" },
+        "mercadoPagoPublicKey": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles and RBAC."
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Products catalog."
+    },
+    "/sales/{saleId}": {
+      "schema": { "$ref": "#/entities/Sale" },
+      "description": "Sale registries. Items are stored as array or subcollection."
+    },
+    "/sales/{saleId}/items/{itemId}": {
+      "schema": { "$ref": "#/entities/SaleItem" },
+      "description": "Items of a specific sale."
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/Setting" },
+      "description": "App settings like MP token"
+    }
+  }
+}

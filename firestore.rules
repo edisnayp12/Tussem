@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Primitive Helpers
+    function isSignedIn() { return request.auth != null; }
+    
+    function isSuperAdmin() {
+      return isSignedIn() && 
+             (('email' in request.auth.token && request.auth.token.email == 'tusemmaxe@gmail.com'));
+    }
+
+    // Explicit Rules for Collections
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn(); 
+    }
+
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /sales/{saleId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+    
+    match /sales/{saleId}/items/{itemId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+    
+    match /settings/{settingId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /logs/{logId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Catch-all rules
+    match /{document=**} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

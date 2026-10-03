@@ -1,0 +1,52 @@
+
+{
+  "id": "tusemm-cantina-v1",
+  "short_name": "TUSEMM",
+  "name": "Cantina TUSEMM - Sete Encruzilhada",
+  "description": "Sistema de gestão completo para a cantina da Tenda de Umbanda de Sete Encruzilhada e Maria Mulambo.",
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "theme_color": "#4c1d95",
+  "background_color": "#4c1d95",
+  "display": "standalone",
+  "orientation": "portrait",
+  "start_url": "./index.html",
+  "scope": "./",
+  "categories": ["business", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3081/3081913.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3081/3081913.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3081/3081913.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3081/3081913.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Tela de Vendas TUSEMM"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3081/3081913.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Interface Mobile TUSEMM"
+    }
+  ]
+}
