@@ -68,12 +68,11 @@ const ensureAuthReady = () => {
         try {
           await signInAnonymously(auth);
         } catch (error: any) {
-          console.error("Falha fatal na autenticação do Firebase:", error);
+          console.warn("Aviso de autenticação anônima (prosseguindo para login):", error.message);
           resolved = true;
           clearTimeout(timeout);
           unsubscribe();
-          // Rejeitamos com uma mensagem clara se não conseguirmos nem login anônimo
-          reject(new Error(`Falha ao conectar com o Firebase: ${error.message}. Verifique se o login anônimo está ativado.`));
+          resolve();
         }
       }
     });

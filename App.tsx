@@ -25,22 +25,18 @@ const App: React.FC = () => {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [settings, setSettings] = useState<AppSettings>({ cantinaName: 'TUSEMM - Maria Mulambo' });
   const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [dbStatus, setDbStatus] = useState<'healthy' | 'warning' | 'error' | 'syncing'>('healthy');
   const [lastSync, setLastSync] = useState(new Date());
   const [loginData, setLoginData] = useState({ user: '', pass: '' });
 
   useEffect(() => {
-    // Timeout para evitar carregamento infinito
+    // Timeout para evitar tela de carregamento presa
     const timer = setTimeout(() => {
-      if (isLoading && !loadError) {
-        setIsLoading(false);
-        setLoadError("O banco de dados demorou mais de 15 segundos para responder. Clique abaixo para tentar entrar mesmo assim ou verifique sua internet.");
-      }
-    }, 15000); 
+      setIsLoading(false);
+    }, 2000); 
 
     return () => clearTimeout(timer);
-  }, [isLoading, loadError]);
+  }, []);
 
   useEffect(() => {
     setIsLoading(true);
@@ -51,22 +47,20 @@ const App: React.FC = () => {
     let unsubLogs: any;
 
     const handleError = (err: any) => {
-      console.error("Firebase Sync Error:", err);
-      setDbStatus('error');
-      
-      const errorMsg = err.code || err.message || "Erro desconhecido";
-      
-      if (err.code === 'permission-denied') {
-        setLoadError(`Acesso negado ao Firebase (Permission Denied). Tente logar como tusemmaxe para liberar.`);
-      } else {
-        setLoadError(`Erro de Sincronização: ${errorMsg}`);
-      }
+      console.warn("Firebase Sync Notice:", err);
+      setDbStatus('warning');
       setIsLoading(false);
     };
 
     const initFirebaseListeners = async () => {
+      // Timeout de segurança para nunca prender o usuário na tela de carregamento
+      const safetyTimer = setTimeout(() => {
+        setIsLoading(false);
+      }, 2500);
+
       try {
-        await db.ensureAuthReady(); // Aguarda a autenticação (anônima ou logado) terminar
+        await db.ensureAuthReady(); // Aguarda a autenticação inicial
+        clearTimeout(safetyTimer);
         
         unsubProducts = db.subscribeToProducts((p) => { setProducts(p); setLastSync(new Date()); }, handleError);
         unsubSales = db.subscribeToSales((s) => { 
@@ -84,7 +78,7 @@ const App: React.FC = () => {
         unsubSettings = db.subscribeToSettings((set) => { 
           setSettings(set); 
           setLastSync(new Date()); 
-          setIsLoading(false); // Só remove o loading quando as configurações chegam
+          setIsLoading(false); 
         }, handleError);
 
         // Escuta os logs de auditoria
@@ -95,9 +89,8 @@ const App: React.FC = () => {
 
         setDbStatus('healthy');
       } catch (e: any) {
-        console.error(e);
-        setDbStatus('error');
-        setLoadError(e.message);
+        console.warn("Firebase init notice:", e);
+        setDbStatus('warning');
         setIsLoading(false);
       }
     };
@@ -187,35 +180,6 @@ const App: React.FC = () => {
       </div>
       <h1 className="text-3xl font-black uppercase tracking-[0.2em] mb-2">TUSEMM</h1>
       <p className="text-[10px] opacity-40 font-black uppercase tracking-[0.3em]">Conectando ao Firebase...</p>
-    </div>
-  );
-
-  if (loadError && !currentUser && !isReservaRoute) return (
-    <div className="min-h-screen bg-red-950 flex flex-col items-center justify-center text-white p-8 text-center">
-      <i className="fa-solid fa-triangle-exclamation text-6xl mb-6 text-red-400"></i>
-      <h1 className="text-2xl font-black uppercase mb-4">Erro de Conexão</h1>
-      <p className="text-sm opacity-80 mb-2 max-w-xs">{loadError}</p>
-      <p className="text-[10px] opacity-40 mb-8 font-mono">Projeto: {firebaseConfig.projectId}</p>
-      <div className="space-y-4 w-full max-w-xs">
-        <button 
-          onClick={() => { setLoadError(null); setIsLoading(true); window.location.reload(); }}
-          className="w-full bg-white text-red-950 py-4 rounded-3xl font-black uppercase text-xs"
-        >
-          Tentar Reconectar
-        </button>
-        <button 
-          onClick={() => { 
-            setLoadError(null); 
-            setIsLoading(false); 
-            // Força o status como healthy se o usuário decidir ignorar para tentar logar
-            setDbStatus('warning');
-          }}
-          className="w-full bg-red-800 text-white py-4 rounded-3xl font-black uppercase text-xs opacity-50"
-        >
-          Ignorar e Ir para Login
-        </button>
-      </div>
-      <p className="text-[8px] uppercase font-black opacity-30 mt-10 tracking-widest">Verifique se o Login Anônimo está ativo no Console do Firebase</p>
     </div>
   );
 
