@@ -122,8 +122,8 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, onCompleteSal
         items: cart,
         total: cartTotal,
         paymentMethod,
-        customerName: isFiado ? customerName.trim() : undefined,
-        telefone_comprador: isFiado ? customerPhone.trim() : undefined,
+        customerName: isFiado ? customerName.trim() : (customerName.trim() || undefined),
+        telefone_comprador: isFiado ? customerPhone.trim() : (customerPhone.trim() || undefined),
         isDebtPaid: paymentMethod !== PaymentMethod.FIADO
       });
       setCart([]);
@@ -143,6 +143,7 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, onCompleteSal
     if (!paymentMethod || isFinishing || cart.length === 0) return;
     setValidationError(null);
     
+    // Apenas Fiado exige Nome e WhatsApp obrigatoriamente
     if (paymentMethod === PaymentMethod.FIADO) {
       if (!customerName.trim()) {
         const msg = 'Nome do cliente é obrigatório para registrar a venda no Fiado.';
@@ -160,14 +161,14 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, onCompleteSal
         setValidationError(msg);
         return;
       }
+      await completeSaleConfirmed();
+      return;
     }
     
+    // Pagamento via PIX
     if (paymentMethod === PaymentMethod.PIX) {
-      if (!settings.pixModo || settings.pixModo === 'mercadopago') {
-        if (!settings.mercadoPagoToken) {
-          alert('Configure o token do Mercado Pago nos Ajustes!');
-          return;
-        }
+      // Se tiver integração Mercado Pago configurada
+      if (settings.mercadoPagoToken && (!settings.pixModo || settings.pixModo === 'mercadopago')) {
         setIsFinishing(true);
         try {
           const res = await fetch("/api/mercadopago/pix", {
@@ -188,31 +189,38 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, onCompleteSal
           setIsFinishing(false);
           return;
         } catch (e: any) {
-          alert("Erro ao gerar PIX Automático: " + e.message + "\n\nO pagamento será confirmado manualmente.");
-          // Fallback to manual will happen if completeSaleConfirmed is called directly inside a fallback flow, but here we just return to avoid double execution logic
+          console.warn("Mercado Pago falhou ou offline, finalizando manualmente:", e);
+          await completeSaleConfirmed();
+          return;
+        }
+      } else if (settings.pixChave && settings.pixModo === 'manual') {
+        // Se tiver Chave PIX estática configurada, gera QR Code na tela
+        setIsFinishing(true);
+        try {
+          const code = generateStaticPix(
+            settings.pixChave,
+            settings.pixTitular || 'Cantina',
+            settings.pixCidade || 'Sua Cidade',
+            cartTotal,
+            `V${Date.now()}`
+          );
+          setPixQrCode(code);
+          setIsPollingPix(false);
           setIsFinishing(false);
+          return;
+        } catch (e) {
+          console.warn("Erro ao gerar PIX estático:", e);
+          await completeSaleConfirmed();
           return;
         }
       } else {
-        if (!settings.pixChave) {
-           alert('Configure a Chave PIX, Titular e Cidade nos Ajustes para utilizar o PIX Manual!');
-           return;
-        }
-        setIsFinishing(true);
-        const code = generateStaticPix(
-          settings.pixChave,
-          settings.pixTitular || 'Cantina',
-          settings.pixCidade || 'Sua Cidade',
-          cartTotal,
-          `V${Date.now()}`
-        );
-        setPixQrCode(code);
-        setIsPollingPix(false);
-        setIsFinishing(false);
+        // Sem token nem chave nos Ajustes: finaliza venda PIX diretamente (ex: máquina física do balcão)
+        await completeSaleConfirmed();
         return;
       }
     }
     
+    // Vendas em Dinheiro, Cartão de Débito ou Cartão de Crédito
     await completeSaleConfirmed();
   };
 

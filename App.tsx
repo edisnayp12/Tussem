@@ -149,14 +149,14 @@ const App: React.FC = () => {
     try {
       const saleItems = data.items.map((i: any) => ({
         produto_id: i.produto_id,
-        nome: i.nome,
-        preco_unitario: i.preco_unitario,
-        quantidade: i.quantidade,
-        subtotal: i.subtotal
+        nome: i.nome || '',
+        preco_unitario: Number(i.preco_unitario) || 0,
+        quantidade: Number(i.quantidade) || 1,
+        subtotal: Number(i.subtotal) || 0
       }));
       await db.createSale(data, saleItems, currentUser?.id || null);
     } catch (e: any) {
-      alert("Erro ao registrar venda: " + e.message);
+      alert("Erro ao registrar venda: " + (e.message || "Erro inesperado"));
       throw e;
     }
   };

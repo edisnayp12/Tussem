@@ -65,19 +65,32 @@ export const db = {
     const sales = read(STORAGE_KEYS.SALES);
     const products = read(STORAGE_KEYS.PRODUCTS);
     
-    const newSale: Sale = {
+    const newSale: any = {
       id: generateId(),
-      usuario_id: operatorId !== '0' ? operatorId : undefined,
       forma_pagamento: sale.paymentMethod,
-      valor_total: sale.total,
+      valor_total: Number(sale.total) || 0,
       status: sale.paymentMethod === PaymentMethod.FIADO ? 'pendente' : 'pago',
-      cliente_nome: sale.customerName || 'Balcão',
+      cliente_nome: (sale.customerName && typeof sale.customerName === 'string' && sale.customerName.trim()) ? sale.customerName.trim() : 'Balcão',
       created_at: new Date().toISOString(),
-      itens: items.map(i => ({ ...i, id: generateId() })),
+      itens: items.map(i => ({
+        id: generateId(),
+        produto_id: i.produto_id,
+        nome: i.nome || '',
+        preco_unitario: Number(i.preco_unitario) || 0,
+        quantidade: Number(i.quantidade) || 1,
+        subtotal: Number(i.subtotal) || 0
+      })),
       tipo_pedido: sale.tipo_pedido || 'balcao',
-      telefone_comprador: sale.telefone_comprador || undefined,
       status_entrega: sale.tipo_pedido === 'reserva' ? 'pendente' : 'entregue'
     };
+
+    if (operatorId && operatorId !== '0') {
+      newSale.usuario_id = operatorId;
+    }
+
+    if (sale.telefone_comprador && typeof sale.telefone_comprador === 'string' && sale.telefone_comprador.trim()) {
+      newSale.telefone_comprador = sale.telefone_comprador.trim();
+    }
 
     sales.push(newSale);
     write(STORAGE_KEYS.SALES, sales);
