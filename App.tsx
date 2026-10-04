@@ -87,10 +87,11 @@ const App: React.FC = () => {
           setIsLoading(false); // Só remove o loading quando as configurações chegam
         }, handleError);
 
-        // Somente donos veem logs
-        if (currentUser && (currentUser.perfil === UserRole.ADMIN || currentUser.id === 'super-admin')) {
-          unsubLogs = (db as any).subscribeToLogs((l: AuditLog[]) => setLogs(l), (err: any) => console.error("Logs error:", err));
-        }
+        // Escuta os logs de auditoria
+        unsubLogs = (db as any).subscribeToLogs(
+          (l: AuditLog[]) => setLogs(l), 
+          (err: any) => console.error("Logs error:", err)
+        );
 
         setDbStatus('healthy');
       } catch (e: any) {
@@ -121,7 +122,9 @@ const App: React.FC = () => {
     if (userLower === 'tusemmaxe@gmail.com' || userLower === 'tusemmaxe') {
       try {
         await db.loginAsSuperAdmin('tusemmaxe@gmail.com', loginData.pass);
-        setCurrentUser({ id: 'super-admin', nome: 'Dono TUSEMM', usuario: 'tusemmaxe', perfil: UserRole.ADMIN, ativo: true });
+        const adminUser = { id: 'super-admin', nome: 'Dono TUSEMM', usuario: 'tusemmaxe', perfil: UserRole.ADMIN, ativo: true };
+        setCurrentUser(adminUser);
+        db.logAction('Dono TUSEMM', 'super-admin', 'Login Super Admin', 'Acesso autenticado com e-mail master').catch(() => {});
         return;
       } catch (e: any) {
         alert(e.message);
@@ -134,11 +137,14 @@ const App: React.FC = () => {
     
     if (foundUser && foundUser.senha === loginData.pass) {
       setCurrentUser(foundUser);
+      db.logAction(foundUser.nome, foundUser.id, 'Login no Sistema', `Usuário ${foundUser.nome} logou com perfil ${foundUser.perfil.toUpperCase()}`).catch(() => {});
       if (foundUser.perfil === UserRole.KDS) {
         setActiveTab('kds');
       }
     } else if (loginData.user === 'Tusemm' && loginData.pass === 'Tusemm@7') {
-      setCurrentUser({ id: '0', nome: 'Master Admin', usuario: 'Tusemm', perfil: UserRole.ADMIN, ativo: true });
+      const masterUser = { id: '0', nome: 'Master Admin', usuario: 'Tusemm', perfil: UserRole.ADMIN, ativo: true };
+      setCurrentUser(masterUser);
+      db.logAction('Master Admin', '0', 'Login Master', 'Acesso com usuário mestre Tusemm').catch(() => {});
     } else {
       alert('Credenciais inválidas ou usuário inativo.');
     }
@@ -262,7 +268,7 @@ const App: React.FC = () => {
     >
       {activeTab === 'home' && <DashboardView sales={sales} products={products} setActiveTab={setActiveTab} />}
       {activeTab === 'venda' && <SalesView products={products} settings={settings} onCompleteSale={handleCompleteSale} />}
-      {activeTab === 'fiado' && <FiadoView fiados={fiados} settings={settings} onPayDebt={(pid, m) => db.payFiado(pid, m)} />}
+      {activeTab === 'fiado' && <FiadoView fiados={fiados} settings={settings} onPayDebt={(pid, m) => db.payFiado(pid, m, currentUser?.nome, currentUser?.id)} />}
       {activeTab === 'estoque' && (
         <InventoryView 
           products={products} 

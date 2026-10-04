@@ -198,14 +198,32 @@ export const db = {
     }
     
     await batch.commit();
+
+    // Registra log de auditoria da venda sem bloquear
+    const formaLabel = (sale.paymentMethod || '').toUpperCase();
+    const tipoOrigem = sale.tipo_pedido === 'reserva' ? 'Reserva' : 'PDV Balcão';
+    const acaoLabel = sale.paymentMethod === PaymentMethod.FIADO ? 'Venda Fiada Registrada' : 'Venda Concluída';
+    this.logAction(
+      newSale.cliente_nome || 'Caixa Balcão',
+      operatorId || '0',
+      acaoLabel,
+      `[${tipoOrigem}] R$ ${(Number(sale.total) || 0).toFixed(2)} (${formaLabel}) - Cliente: ${newSale.cliente_nome}`
+    ).catch(err => console.error("Log venda silenciado:", err));
+
     return newSale as Sale;
   },
 
-  async payFiado(pedidoId: string, method: PaymentMethod) {
+  async payFiado(pedidoId: string, method: PaymentMethod, operatorName?: string, operatorId?: string) {
     await updateDoc(doc(dbInstance, 'sales', pedidoId), {
       status: 'pago',
       pago_com: method
     });
+    this.logAction(
+      operatorName || 'Operador',
+      operatorId || '0',
+      'Baixa de Fiado',
+      `Fiado #${pedidoId.slice(-6).toUpperCase()} quitado com sucesso via ${(method || '').toUpperCase()}`
+    ).catch(err => console.error("Log fiado silenciado:", err));
   },
 
   async updateSale(pedidoId: string, data: any) {
@@ -279,22 +297,46 @@ export const db = {
   },
 
   async logAction(userName: string, userId: string, action: string, details: string) {
-    const logRef = doc(collection(dbInstance, 'logs'));
-    const logData = {
-      id: logRef.id,
-      usuario_nome: userName,
-      usuario_id: userId,
-      acao: action,
-      detalhes: details,
-      data: new Date().toISOString()
-    };
-    await setDoc(logRef, logData);
+    try {
+      const logRef = doc(collection(dbInstance, 'logs'));
+      const logData = {
+        id: logRef.id,
+        usuario_nome: userName || 'Sistema',
+        usuario_id: userId || '0',
+        acao: action,
+        detalhes: details,
+        data: new Date().toISOString()
+      };
+      await setDoc(logRef, logData);
+    } catch (e) {
+      console.error("Erro ao registrar log de auditoria:", e);
+    }
   },
 
   subscribeToLogs: (onUpdate: (logs: any[]) => void, onError?: (err: any) => void) => {
-    const q = query(collection(dbInstance, 'logs'), orderBy('data', 'desc'), where('data', '>=', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())); // Mostra ultimos 7 dias por performance
+    // Consulta direta sem necessidade de índice composto customizado no Firestore
+    const q = query(collection(dbInstance, 'logs'), limit(300));
     return onSnapshot(q, (snapshot) => {
+      // Se a coleção estiver vazia, cria um registro inicial de boas-vindas
+      if (snapshot.empty) {
+        const welcomeRef = doc(collection(dbInstance, 'logs'));
+        setDoc(welcomeRef, {
+          id: welcomeRef.id,
+          usuario_nome: 'Sistema TUSEMM',
+          usuario_id: '0',
+          acao: 'Auditoria Ativada',
+          detalhes: 'Monitoramento de alterações e auditoria de vendas iniciado com sucesso.',
+          data: new Date().toISOString()
+        }).catch(() => {});
+      }
+      
       const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Ordenação na memória por data decrescente (mais recente primeiro)
+      logs.sort((a: any, b: any) => {
+        const timeA = new Date(a.data || a.created_at || 0).getTime();
+        const timeB = new Date(b.data || b.created_at || 0).getTime();
+        return timeB - timeA;
+      });
       onUpdate(logs);
     }, (error) => {
       console.error("Erro ao ouvir logs:", error);
