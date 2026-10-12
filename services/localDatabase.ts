@@ -117,6 +117,28 @@ export const db = {
     }
   },
 
+  async updateSale(pedidoId: string, data: any) {
+    const sales = read(STORAGE_KEYS.SALES);
+    const idx = sales.findIndex((s: Sale) => s.id === pedidoId);
+    if (idx > -1) {
+      sales[idx] = { ...sales[idx], ...data };
+      write(STORAGE_KEYS.SALES, sales);
+    }
+  },
+
+  async updateFiadoCustomer(saleIds: string[], cliente_nome: string, telefone_comprador?: string) {
+    const sales = read(STORAGE_KEYS.SALES);
+    const cleanNome = (cliente_nome || '').trim() || 'Sem Nome';
+    const cleanTel = (telefone_comprador || '').trim();
+    sales.forEach((s: Sale) => {
+      if (saleIds.includes(s.id)) {
+        s.cliente_nome = cleanNome;
+        s.telefone_comprador = cleanTel;
+      }
+    });
+    write(STORAGE_KEYS.SALES, sales);
+  },
+
   async getFiados(): Promise<Sale[]> {
     return read(STORAGE_KEYS.SALES).filter((s: Sale) => s.status === 'pendente' && s.forma_pagamento === 'fiado');
   },

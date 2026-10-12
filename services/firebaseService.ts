@@ -229,6 +229,28 @@ export const db = {
     await updateDoc(doc(dbInstance, 'sales', pedidoId), data);
   },
 
+  async updateFiadoCustomer(saleIds: string[], cliente_nome: string, telefone_comprador?: string, operatorName?: string, operatorId?: string) {
+    const cleanNome = (cliente_nome || '').trim() || 'Sem Nome';
+    const cleanTel = (telefone_comprador || '').trim();
+
+    const batch = writeBatch(dbInstance);
+    for (const id of saleIds) {
+      const sRef = doc(dbInstance, 'sales', id);
+      batch.update(sRef, {
+        cliente_nome: cleanNome,
+        telefone_comprador: cleanTel
+      });
+    }
+    await batch.commit();
+
+    this.logAction(
+      operatorName || 'Operador',
+      operatorId || '0',
+      'Edição de Fiado',
+      `Dados do cliente fiado atualizados: ${cleanNome} (Tel: ${cleanTel || 'Não informado'}) em ${saleIds.length} venda(s)`
+    ).catch(err => console.error("Log fiado silenciado:", err));
+  },
+
   async deleteUser(userId: string, userName: string, operatorName: string, operatorId: string) {
     await deleteDoc(doc(dbInstance, 'users', userId));
     await this.logAction(operatorName, operatorId, 'Exclusão de Usuário', `Usuário Removido: ${userName}`);

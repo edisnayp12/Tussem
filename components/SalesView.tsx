@@ -8,10 +8,11 @@ import { generateStaticPix } from '../services/pix';
 interface SalesViewProps {
   products: Product[];
   settings: AppSettings;
+  fiados?: Sale[];
   onCompleteSale: (sale: any) => Promise<void>;
 }
 
-const SalesView: React.FC<SalesViewProps> = ({ products, settings, onCompleteSale }) => {
+const SalesView: React.FC<SalesViewProps> = ({ products, settings, fiados = [], onCompleteSale }) => {
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(null);
@@ -110,7 +111,22 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, onCompleteSal
 
   const isFiado = paymentMethod === PaymentMethod.FIADO;
   const cleanPhone = customerPhone.replace(/\D/g, '');
-  const isFiadoIncomplete = isFiado && (!customerName.trim() || cleanPhone.length < 10);
+
+  const existingFiadoCustomers = useMemo(() => {
+    if (!fiados || fiados.length === 0) return [];
+    const map = new Map<string, { nome: string; telefone: string }>();
+    fiados.forEach(f => {
+      const nome = f.cliente_nome?.trim() || '';
+      const telefone = f.telefone_comprador?.trim() || '';
+      if (nome && nome !== 'Sem Nome') {
+        const key = telefone ? telefone.replace(/\D/g, '') : nome.toLowerCase();
+        if (!map.has(key)) {
+          map.set(key, { nome, telefone });
+        }
+      }
+    });
+    return Array.from(map.values()).slice(0, 10);
+  }, [fiados]);
 
   const completeSaleConfirmed = async () => {
     setIsFinishing(true);
@@ -118,12 +134,15 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, onCompleteSal
     setPixPaymentId(null);
     setValidationError(null);
     try {
+      const finalName = isFiado ? (customerName.trim() || 'Sem Nome') : (customerName.trim() || undefined);
+      const finalPhone = customerPhone.trim() || undefined;
+
       await onCompleteSale({
         items: cart,
         total: cartTotal,
         paymentMethod,
-        customerName: isFiado ? customerName.trim() : (customerName.trim() || undefined),
-        telefone_comprador: isFiado ? customerPhone.trim() : (customerPhone.trim() || undefined),
+        customerName: finalName,
+        telefone_comprador: finalPhone,
         isDebtPaid: paymentMethod !== PaymentMethod.FIADO
       });
       setCart([]);
@@ -143,24 +162,8 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, onCompleteSal
     if (!paymentMethod || isFinishing || cart.length === 0) return;
     setValidationError(null);
     
-    // Apenas Fiado exige Nome e WhatsApp obrigatoriamente
+    // Venda Fiada: não bloqueia campos, finaliza diretamente permitindo editar depois
     if (paymentMethod === PaymentMethod.FIADO) {
-      if (!customerName.trim()) {
-        const msg = 'Nome do cliente é obrigatório para registrar a venda no Fiado.';
-        setValidationError(msg);
-        return;
-      }
-      const digits = customerPhone.replace(/\D/g, '');
-      if (!customerPhone.trim()) {
-        const msg = 'Número de Telefone / WhatsApp com DDD é obrigatório para o Fiado.';
-        setValidationError(msg);
-        return;
-      }
-      if (digits.length < 10) {
-        const msg = 'Informe um Telefone / WhatsApp com DDD válido (pelo menos 10 dígitos com DDD).';
-        setValidationError(msg);
-        return;
-      }
       await completeSaleConfirmed();
       return;
     }
@@ -393,41 +396,67 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, onCompleteSal
                       </div>
                     </div>
 
-                    {/* DADOS DO CLIENTE: OBRIGATÓRIOS EXCLUSIVAMENTE PARA VENDA NO FIADO */}
+                    {/* DADOS DO CLIENTE PARA VENDA NO FIADO */}
                     {isFiado && (
-                      <div className="bg-purple-50 p-4 rounded-3xl border-2 border-purple-400 shadow-md space-y-3 animate-in fade-in slide-in-from-top-2">
+                      <div className="bg-purple-50 p-4 rounded-3xl border border-purple-200 shadow-sm space-y-3 animate-in fade-in slide-in-from-top-2">
                         <div className="flex items-center justify-between">
                           <span className="text-[9px] font-black uppercase tracking-widest text-purple-950 flex items-center gap-1.5">
-                            <i className="fa-solid fa-user-tag text-purple-600"></i>
-                            Dados Obrigatórios do Fiado
+                            <i className="fa-solid fa-user-clock text-purple-600"></i>
+                            Dados do Fiado (Opcional)
                           </span>
-                          <span className="text-[8px] font-black uppercase tracking-widest bg-red-600 text-white px-2.5 py-0.5 rounded-full animate-pulse">
-                            Obrigatório
+                          <span className="text-[8px] font-black uppercase tracking-widest bg-purple-200 text-purple-900 px-2 py-0.5 rounded-full">
+                            WhatsApp
                           </span>
                         </div>
+
+                        {/* Clientes com Fiado Já em Aberto (Seleção Rápida com 1 clique) */}
+                        {existingFiadoCustomers.length > 0 && (
+                          <div>
+                            <span className="text-[8px] font-black uppercase text-purple-800 tracking-wider block mb-1.5 pl-1">
+                              Incluir a cliente existente no fiado:
+                            </span>
+                            <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto">
+                              {existingFiadoCustomers.map((cust, idx) => (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  onClick={() => {
+                                    setCustomerName(cust.nome);
+                                    if (cust.telefone) setCustomerPhone(formatPhone(cust.telefone));
+                                  }}
+                                  className={`px-2.5 py-1 rounded-xl text-[9px] font-black uppercase tracking-wider border transition-all active:scale-95 flex items-center gap-1 ${
+                                    customerName.toLowerCase() === cust.nome.toLowerCase()
+                                      ? 'bg-purple-900 text-white border-purple-900 shadow-xs'
+                                      : 'bg-white text-purple-900 border-purple-200 hover:bg-purple-100'
+                                  }`}
+                                >
+                                  <i className="fa-solid fa-user text-[8px] opacity-60"></i>
+                                  <span>{cust.nome}</span>
+                                  {cust.telefone && <i className="fa-brands fa-whatsapp text-green-600 text-[9px]"></i>}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
 
                         <div className="space-y-2.5">
                           <div>
                             <label className="text-[9px] font-black uppercase text-purple-900 tracking-wider mb-1 block pl-1">
-                              Nome do Cliente *
+                              Nome do Cliente
                             </label>
                             <input 
                               type="text" 
-                              placeholder="Nome do cliente fiado..." 
+                              placeholder="Ex: Maria, João ou deixe vazio..." 
                               value={customerName} 
                               onChange={e => { setCustomerName(e.target.value); setValidationError(null); }} 
                               disabled={isFinishing}
-                              className={`w-full bg-white border rounded-2xl px-4 py-3.5 font-bold uppercase text-xs text-purple-950 placeholder-gray-400 outline-none transition-all ${
-                                !customerName.trim()
-                                  ? 'border-red-300 focus:border-red-500 focus:ring-2 focus:ring-red-200'
-                                  : 'border-gray-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-200'
-                              }`} 
+                              className="w-full bg-white border border-gray-200 focus:border-purple-500 rounded-2xl px-4 py-3 font-bold uppercase text-xs text-purple-950 placeholder-gray-400 outline-none transition-all"
                             />
                           </div>
 
                           <div>
                             <label className="text-[9px] font-black uppercase text-purple-900 tracking-wider mb-1 block pl-1">
-                              Telefone / WhatsApp com DDD *
+                              Telefone / WhatsApp com DDD
                             </label>
                             <div className="relative">
                               <i className="fa-brands fa-whatsapp absolute left-4 top-1/2 -translate-y-1/2 text-green-500 text-sm"></i>
@@ -437,17 +466,13 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, onCompleteSal
                                 value={customerPhone} 
                                 onChange={e => { setCustomerPhone(formatPhone(e.target.value)); setValidationError(null); }} 
                                 disabled={isFinishing}
-                                className={`w-full bg-white border rounded-2xl pl-11 pr-4 py-3.5 font-bold uppercase text-xs text-purple-950 placeholder-gray-400 outline-none transition-all ${
-                                  cleanPhone.length < 10
-                                    ? 'border-red-300 focus:border-red-500 focus:ring-2 focus:ring-red-200'
-                                    : 'border-gray-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-200'
-                                }`} 
+                                className="w-full bg-white border border-gray-200 focus:border-purple-500 rounded-2xl pl-11 pr-4 py-3 font-bold text-xs text-purple-950 placeholder-gray-400 outline-none transition-all"
                               />
                             </div>
                           </div>
 
                           <p className="text-[8px] font-bold text-purple-800 pl-1 leading-tight">
-                            * O Nome e o WhatsApp são obrigatórios exclusivamente para a opção Fiado para permitir cobranças futuras.
+                            * Não é obrigatório agora. Você também pode incluir ou alterar o nome e WhatsApp a qualquer momento na aba Fiados para cobrar.
                           </p>
                         </div>
                       </div>
@@ -460,18 +485,11 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, onCompleteSal
                       </div>
                     )}
 
-                    {isFiadoIncomplete && !validationError && (
-                      <div className="bg-amber-50 border border-amber-200 text-amber-800 p-3 rounded-2xl text-[10px] font-bold flex items-center gap-2 animate-in fade-in">
-                        <i className="fa-solid fa-circle-exclamation text-amber-500 text-sm"></i>
-                        <span>Preencha o Nome e o WhatsApp com DDD para liberar a finalização do Fiado.</span>
-                      </div>
-                    )}
-
                     <button
                       onClick={finalizeSale}
-                      disabled={!paymentMethod || isFinishing || cart.length === 0 || isFiadoIncomplete}
+                      disabled={!paymentMethod || isFinishing || cart.length === 0}
                       className={`w-full py-5 rounded-3xl font-black text-xs uppercase tracking-widest transition-all ${
-                        !paymentMethod || isFinishing || cart.length === 0 || isFiadoIncomplete
+                        !paymentMethod || isFinishing || cart.length === 0
                           ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none' 
                           : 'bg-green-600 text-white shadow-xl active:scale-95 hover:bg-green-700'
                       }`}
@@ -480,8 +498,6 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, onCompleteSal
                         <span className="flex items-center justify-center gap-2">
                           <i className="fa-solid fa-spinner animate-spin"></i> Processando...
                         </span>
-                      ) : isFiadoIncomplete ? (
-                        'Preencha Nome e WhatsApp para Finalizar'
                       ) : isFiado ? (
                         'Finalizar Venda no Fiado'
                       ) : (

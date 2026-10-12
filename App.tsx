@@ -1,8 +1,6 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { Product, Sale, PaymentMethod, User, AppSettings, UserRole } from './types';
 import { db } from './services/firebaseService';
-import firebaseConfig from './firebase-applet-config.json';
 import Layout from './components/Layout';
 import DashboardView from './components/DashboardView';
 import SalesView from './components/SalesView';
@@ -15,8 +13,28 @@ import { AuditLog } from './types';
 import ReservaView from './components/ReservaView';
 import KdsView from './components/KdsView';
 
+const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos (600.000 ms)
+const SESSION_USER_KEY = 'cantina_user_session';
+const SESSION_ACTIVITY_KEY = 'cantina_last_activity';
+
+const getInitialUser = (): User | null => {
+  try {
+    const savedUser = localStorage.getItem(SESSION_USER_KEY);
+    const lastActivity = localStorage.getItem(SESSION_ACTIVITY_KEY);
+    if (savedUser && lastActivity) {
+      const elapsed = Date.now() - Number(lastActivity);
+      if (elapsed < INACTIVITY_TIMEOUT_MS) {
+        return JSON.parse(savedUser);
+      }
+    }
+  } catch (err) {
+    console.error("Erro ao carregar sessão existente:", err);
+  }
+  return null;
+};
+
 const App: React.FC = () => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(getInitialUser);
   const [activeTab, setActiveTab] = useState('home');
   const [products, setProducts] = useState<Product[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
@@ -28,6 +46,53 @@ const App: React.FC = () => {
   const [dbStatus, setDbStatus] = useState<'healthy' | 'warning' | 'error' | 'syncing'>('healthy');
   const [lastSync, setLastSync] = useState(new Date());
   const [loginData, setLoginData] = useState({ user: '', pass: '' });
+
+  // Logout com controle de inatividade
+  const handleLogout = useCallback(async (isAuto = false) => {
+    localStorage.removeItem(SESSION_USER_KEY);
+    localStorage.removeItem(SESSION_ACTIVITY_KEY);
+    setCurrentUser(null);
+    try {
+      await db.logout();
+    } catch (err) {
+      console.error("Erro ao deslogar:", err);
+    }
+    if (isAuto) {
+      alert("Sua sessão foi encerrada por inatividade (mais de 10 minutos sem uso).");
+    }
+  }, []);
+
+  // Monitoramento de inatividade (10 minutos)
+  useEffect(() => {
+    if (!currentUser) return;
+
+    let lastRecorded = Date.now();
+    const recordActivity = () => {
+      const now = Date.now();
+      if (now - lastRecorded > 3000) {
+        lastRecorded = now;
+        localStorage.setItem(SESSION_ACTIVITY_KEY, now.toString());
+      }
+    };
+
+    const activityEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'];
+    activityEvents.forEach(evt => window.addEventListener(evt, recordActivity, { passive: true }));
+
+    // Intervalo para verificar a inatividade a cada 5 segundos
+    const checkInterval = setInterval(() => {
+      const last = Number(localStorage.getItem(SESSION_ACTIVITY_KEY) || Date.now());
+      const elapsed = Date.now() - last;
+      if (elapsed >= INACTIVITY_TIMEOUT_MS) {
+        clearInterval(checkInterval);
+        handleLogout(true);
+      }
+    }, 5000);
+
+    return () => {
+      activityEvents.forEach(evt => window.removeEventListener(evt, recordActivity));
+      clearInterval(checkInterval);
+    };
+  }, [currentUser, handleLogout]);
 
   useEffect(() => {
     // Timeout para evitar tela de carregamento presa
@@ -53,13 +118,12 @@ const App: React.FC = () => {
     };
 
     const initFirebaseListeners = async () => {
-      // Timeout de segurança para nunca prender o usuário na tela de carregamento
       const safetyTimer = setTimeout(() => {
         setIsLoading(false);
       }, 2500);
 
       try {
-        await db.ensureAuthReady(); // Aguarda a autenticação inicial
+        await db.ensureAuthReady();
         clearTimeout(safetyTimer);
         
         unsubProducts = db.subscribeToProducts((p) => { setProducts(p); setLastSync(new Date()); }, handleError);
@@ -81,7 +145,6 @@ const App: React.FC = () => {
           setIsLoading(false); 
         }, handleError);
 
-        // Escuta os logs de auditoria
         unsubLogs = (db as any).subscribeToLogs(
           (l: AuditLog[]) => setLogs(l), 
           (err: any) => console.error("Logs error:", err)
@@ -104,19 +167,25 @@ const App: React.FC = () => {
       unsubSettings && unsubSettings();
       unsubLogs && unsubLogs();
     };
-  }, [currentUser]); // Re-run if user changes to subscribe to logs if needed
+  }, [currentUser]);
+
+  const saveUserSession = (user: User) => {
+    localStorage.setItem(SESSION_USER_KEY, JSON.stringify(user));
+    localStorage.setItem(SESSION_ACTIVITY_KEY, Date.now().toString());
+    setCurrentUser(user);
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     
     const userLower = loginData.user.trim().toLowerCase();
 
-    // Tenta primeiro o login como Super Admin (E-mail Real no Firebase)
+    // Login como Super Admin
     if (userLower === 'tusemmaxe@gmail.com' || userLower === 'tusemmaxe') {
       try {
         await db.loginAsSuperAdmin('tusemmaxe@gmail.com', loginData.pass);
-        const adminUser = { id: 'super-admin', nome: 'Dono TUSEMM', usuario: 'tusemmaxe', perfil: UserRole.ADMIN, ativo: true };
-        setCurrentUser(adminUser);
+        const adminUser: User = { id: 'super-admin', nome: 'Dono TUSEMM', usuario: 'tusemmaxe', perfil: UserRole.ADMIN, ativo: true };
+        saveUserSession(adminUser);
         db.logAction('Dono TUSEMM', 'super-admin', 'Login Super Admin', 'Acesso autenticado com e-mail master').catch(() => {});
         return;
       } catch (e: any) {
@@ -125,18 +194,17 @@ const App: React.FC = () => {
       }
     }
 
-    // Se não for o dono, tenta o login master antigo ou usuários comuns
     const foundUser = users.find(u => u.usuario === loginData.user && u.ativo);
     
     if (foundUser && foundUser.senha === loginData.pass) {
-      setCurrentUser(foundUser);
+      saveUserSession(foundUser);
       db.logAction(foundUser.nome, foundUser.id, 'Login no Sistema', `Usuário ${foundUser.nome} logou com perfil ${foundUser.perfil.toUpperCase()}`).catch(() => {});
       if (foundUser.perfil === UserRole.KDS) {
         setActiveTab('kds');
       }
     } else if (loginData.user === 'Tusemm' && loginData.pass === 'Tusemm@7') {
-      const masterUser = { id: '0', nome: 'Master Admin', usuario: 'Tusemm', perfil: UserRole.ADMIN, ativo: true };
-      setCurrentUser(masterUser);
+      const masterUser: User = { id: '0', nome: 'Master Admin', usuario: 'Tusemm', perfil: UserRole.ADMIN, ativo: true };
+      saveUserSession(masterUser);
       db.logAction('Master Admin', '0', 'Login Master', 'Acesso com usuário mestre Tusemm').catch(() => {});
     } else {
       alert('Credenciais inválidas ou usuário inativo.');
@@ -221,18 +289,34 @@ const App: React.FC = () => {
     <Layout 
       activeTab={activeTab} 
       setActiveTab={setActiveTab} 
-      onLogout={async () => {
-        await db.logout();
-        setCurrentUser(null);
-      }} 
+      onLogout={() => handleLogout(false)} 
       settings={settings} 
       currentUser={currentUser} 
       dbStatus={dbStatus}
       lastSyncAt={lastSync}
     >
       {activeTab === 'home' && <DashboardView sales={sales} products={products} setActiveTab={setActiveTab} />}
-      {activeTab === 'venda' && <SalesView products={products} settings={settings} onCompleteSale={handleCompleteSale} />}
-      {activeTab === 'fiado' && <FiadoView fiados={fiados} settings={settings} onPayDebt={(pid, m) => db.payFiado(pid, m, currentUser?.nome, currentUser?.id)} />}
+      {activeTab === 'venda' && (
+        <SalesView 
+          products={products} 
+          settings={settings} 
+          fiados={fiados}
+          onCompleteSale={handleCompleteSale} 
+        />
+      )}
+      {activeTab === 'fiado' && (
+        <FiadoView 
+          fiados={fiados} 
+          products={products}
+          settings={settings} 
+          onPayDebt={(pid, m) => db.payFiado(pid, m, currentUser?.nome, currentUser?.id)} 
+          onUpdateFiadoCustomer={async (saleIds, nome, telefone) => {
+            await db.updateFiadoCustomer(saleIds, nome, telefone, currentUser?.nome, currentUser?.id);
+          }}
+          onAddFiadoSale={handleCompleteSale}
+          onNavigateToPDV={() => setActiveTab('venda')}
+        />
+      )}
       {activeTab === 'estoque' && (
         <InventoryView 
           products={products} 
