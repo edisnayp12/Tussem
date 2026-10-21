@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Product, Sale, PaymentMethod, User, AppSettings, UserRole } from './types';
+import { Product, Sale, PaymentMethod, User, AppSettings, UserRole, Customer, AuditLog } from './types';
 import { db } from './services/firebaseService';
 import Layout from './components/Layout';
 import DashboardView from './components/DashboardView';
 import SalesView from './components/SalesView';
 import InventoryView from './components/InventoryView';
 import FiadoView from './components/FiadoView';
+import CustomersView from './components/CustomersView';
 import ReportsView from './components/ReportsView';
 import SettingsView from './components/SettingsView';
 import LogView from './components/LogView';
-import { AuditLog } from './types';
 import ReservaView from './components/ReservaView';
 import KdsView from './components/KdsView';
 
@@ -39,6 +39,7 @@ const App: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [fiados, setFiados] = useState<Sale[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [settings, setSettings] = useState<AppSettings>({ cantinaName: 'TUSEMM - Maria Mulambo' });
@@ -46,6 +47,8 @@ const App: React.FC = () => {
   const [dbStatus, setDbStatus] = useState<'healthy' | 'warning' | 'error' | 'syncing'>('healthy');
   const [lastSync, setLastSync] = useState(new Date());
   const [loginData, setLoginData] = useState({ user: '', pass: '' });
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [inactivityNotice, setInactivityNotice] = useState(false);
 
   // Logout com controle de inatividade
   const handleLogout = useCallback(async (isAuto = false) => {
@@ -58,7 +61,7 @@ const App: React.FC = () => {
       console.error("Erro ao deslogar:", err);
     }
     if (isAuto) {
-      alert("Sua sessão foi encerrada por inatividade (mais de 10 minutos sem uso).");
+      setInactivityNotice(true);
     }
   }, []);
 
@@ -107,6 +110,7 @@ const App: React.FC = () => {
     setIsLoading(true);
     let unsubProducts: any;
     let unsubSales: any;
+    let unsubCustomers: any;
     let unsubUsers: any;
     let unsubSettings: any;
     let unsubLogs: any;
@@ -138,6 +142,7 @@ const App: React.FC = () => {
           ));
           setLastSync(new Date()); 
         }, handleError);
+        unsubCustomers = db.subscribeToCustomers((c) => { setCustomers(c); setLastSync(new Date()); }, handleError);
         unsubUsers = db.subscribeToUsers((u) => { setUsers(u); setLastSync(new Date()); }, handleError);
         unsubSettings = db.subscribeToSettings((set) => { 
           setSettings(set); 
@@ -163,6 +168,7 @@ const App: React.FC = () => {
     return () => {
       unsubProducts && unsubProducts();
       unsubSales && unsubSales();
+      unsubCustomers && unsubCustomers();
       unsubUsers && unsubUsers();
       unsubSettings && unsubSettings();
       unsubLogs && unsubLogs();
@@ -177,6 +183,8 @@ const App: React.FC = () => {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setLoginError(null);
+    setInactivityNotice(false);
     
     const userLower = loginData.user.trim().toLowerCase();
 
@@ -189,7 +197,7 @@ const App: React.FC = () => {
         db.logAction('Dono TUSEMM', 'super-admin', 'Login Super Admin', 'Acesso autenticado com e-mail master').catch(() => {});
         return;
       } catch (e: any) {
-        alert(e.message);
+        setLoginError(e.message || 'Erro ao autenticar administrador');
         return;
       }
     }
@@ -207,7 +215,7 @@ const App: React.FC = () => {
       saveUserSession(masterUser);
       db.logAction('Master Admin', '0', 'Login Master', 'Acesso com usuário mestre Tusemm').catch(() => {});
     } else {
-      alert('Credenciais inválidas ou usuário inativo.');
+      setLoginError('Credenciais inválidas ou usuário inativo.');
     }
   };
 
@@ -238,6 +246,14 @@ const App: React.FC = () => {
     }
   };
 
+  const handleSaveCustomer = async (data: { nome: string; telefone: string }) => {
+    await db.saveOrUpdateCustomer(data, currentUser?.nome, currentUser?.id);
+  };
+
+  const handleDeleteCustomer = async (customerId: string, customerName: string) => {
+    await db.deleteCustomer(customerId, customerName, currentUser?.nome, currentUser?.id);
+  };
+
   const isReservaRoute = window.location.pathname === '/reserva';
 
   if (isLoading && !currentUser) return (
@@ -265,19 +281,35 @@ const App: React.FC = () => {
         </div>
         
         <form onSubmit={handleLogin} className="space-y-5">
+          {inactivityNotice && (
+            <div className="bg-amber-50 border border-amber-200 text-amber-900 px-4 py-3 rounded-2xl text-xs font-bold text-center leading-snug animate-in fade-in">
+              ⏰ Sua sessão foi encerrada após 10 minutos sem uso. Faça login para continuar.
+            </div>
+          )}
+          {loginError && (
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl text-xs font-bold text-center leading-snug animate-in fade-in">
+              ⚠️ {loginError}
+            </div>
+          )}
           <input 
             type="text" 
             placeholder="Usuário" 
             className="w-full bg-gray-50 border-2 border-transparent focus:border-purple-100 rounded-3xl px-8 py-5 font-bold outline-none text-purple-950" 
             value={loginData.user} 
-            onChange={e => setLoginData({...loginData, user: e.target.value})} 
+            onChange={e => {
+              setLoginError(null);
+              setLoginData({...loginData, user: e.target.value});
+            }} 
           />
           <input 
             type="password" 
             placeholder="Senha" 
             className="w-full bg-gray-50 border-2 border-transparent focus:border-purple-100 rounded-3xl px-8 py-5 font-bold outline-none text-purple-950" 
             value={loginData.pass} 
-            onChange={e => setLoginData({...loginData, pass: e.target.value})} 
+            onChange={e => {
+              setLoginError(null);
+              setLoginData({...loginData, pass: e.target.value});
+            }} 
           />
           <button type="submit" className="w-full bg-purple-950 text-white py-6 rounded-3xl font-black uppercase tracking-[0.1em] shadow-2xl active:scale-95 transition-all mt-6 text-sm">Entrar</button>
         </form>
@@ -301,6 +333,7 @@ const App: React.FC = () => {
           products={products} 
           settings={settings} 
           fiados={fiados}
+          customers={customers}
           onCompleteSale={handleCompleteSale} 
         />
       )}
@@ -315,6 +348,16 @@ const App: React.FC = () => {
           }}
           onAddFiadoSale={handleCompleteSale}
           onNavigateToPDV={() => setActiveTab('venda')}
+        />
+      )}
+      {activeTab === 'clientes' && (
+        <CustomersView 
+          customers={customers} 
+          sales={sales} 
+          currentUser={currentUser} 
+          onSaveCustomer={handleSaveCustomer} 
+          onDeleteCustomer={handleDeleteCustomer}
+          onSelectCustomerForSale={() => setActiveTab('venda')}
         />
       )}
       {activeTab === 'estoque' && (
@@ -341,6 +384,7 @@ const App: React.FC = () => {
             db.deleteUser(id, u?.nome || 'Desconhecido', currentUser.nome, currentUser.id);
           }} 
           onViewLogs={() => setActiveTab('logs')}
+          onViewCustomers={() => setActiveTab('clientes')}
         />
       )}
     </Layout>

@@ -12,9 +12,10 @@ interface SettingsViewProps {
   onAddUser: (user: any) => void;
   onRemoveUser: (userId: string) => void;
   onViewLogs: () => void;
+  onViewCustomers?: () => void;
 }
 
-const SettingsView: React.FC<SettingsViewProps> = ({ users, currentUser, settings, onUpdateSettings, onAddUser, onRemoveUser, onViewLogs }) => {
+const SettingsView: React.FC<SettingsViewProps> = ({ users, currentUser, settings, onUpdateSettings, onAddUser, onRemoveUser, onViewLogs, onViewCustomers }) => {
   const [dbHealth, setDbHealth] = useState<any>({});
   const [appSettings, setAppSettings] = useState(settings);
 
@@ -156,9 +157,14 @@ const SettingsView: React.FC<SettingsViewProps> = ({ users, currentUser, setting
           <button onClick={handleExport} className="w-full bg-purple-900 text-white py-4 rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-black transition-all">Exportar Backup</button>
           <button onClick={handleImport} className="w-full bg-gray-200 text-purple-950 py-4 rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-gray-300 transition-all">Importar Backup</button>
         </div>
-        <button onClick={onViewLogs} className="w-full mt-4 bg-purple-50 text-purple-900 py-4 rounded-2xl font-black text-[10px] uppercase border border-purple-100 hover:bg-purple-100 transition-all">
-          <i className="fa-solid fa-clipboard-list mr-2"></i> Ver Logs do Sistema
-        </button>
+        <div className="grid grid-cols-2 gap-3 mt-4">
+          <button onClick={onViewCustomers} className="w-full bg-purple-50 text-purple-900 py-4 rounded-2xl font-black text-[10px] uppercase border border-purple-100 hover:bg-purple-100 transition-all flex items-center justify-center gap-2">
+            <i className="fa-solid fa-users"></i> Base de Clientes
+          </button>
+          <button onClick={onViewLogs} className="w-full bg-purple-50 text-purple-900 py-4 rounded-2xl font-black text-[10px] uppercase border border-purple-100 hover:bg-purple-100 transition-all flex items-center justify-center gap-2">
+            <i className="fa-solid fa-clipboard-list"></i> Logs do Sistema
+          </button>
+        </div>
       </div>
 
       <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100">

@@ -66,6 +66,22 @@
         "mercadoPagoToken": { "type": "string" },
         "mercadoPagoPublicKey": { "type": "string" }
       }
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Customer registered via reservation or sales",
+      "type": "object",
+      "properties": {
+        "nome": { "type": "string" },
+        "telefone": { "type": "string" },
+        "telefone_limpo": { "type": "string" },
+        "total_pedidos": { "type": "number" },
+        "total_gasto": { "type": "number" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" },
+        "origem": { "type": "string" }
+      },
+      "required": ["nome", "telefone", "telefone_limpo"]
     }
   },
   "firestore": {
@@ -88,6 +104,10 @@
     "/settings/{settingId}": {
       "schema": { "$ref": "#/entities/Setting" },
       "description": "App settings like MP token"
+    },
+    "/customers/{customerId}": {
+      "schema": { "$ref": "#/entities/Customer" },
+      "description": "Registered customer records with contact and order history."
     }
   }
 }

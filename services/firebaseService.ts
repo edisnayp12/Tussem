@@ -12,16 +12,26 @@ import {
 } from 'firebase/firestore';
 
 import firebaseConfig from '../firebase-applet-config.json';
-import { Product, Sale, PaymentMethod, SaleItem, User, UserRole, AppSettings } from '../types';
+import { Product, Sale, PaymentMethod, SaleItem, User, UserRole, AppSettings, Customer } from '../types';
+import { normalizePhone, formatPhone } from '../utils/phoneUtils';
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 
-// Inicialização com Cache Offline otimizada para Android e proteção contra campos undefined
-const dbInstance = initializeFirestore(app, {
-  localCache: persistentLocalCache({}),
-  ignoreUndefinedProperties: true
-}, firebaseConfig.firestoreDatabaseId || '(default)');
+// Inicialização com proteção para evitar erros caso já esteja inicializado ou com restrição de IndexedDB
+let dbInstance: any;
+try {
+  dbInstance = initializeFirestore(app, {
+    localCache: persistentLocalCache({}),
+    ignoreUndefinedProperties: true
+  }, firebaseConfig.firestoreDatabaseId || '(default)');
+} catch (e) {
+  try {
+    dbInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId || '(default)');
+  } catch (err) {
+    dbInstance = getFirestore(app);
+  }
+}
 
 export { dbInstance };
 
@@ -117,6 +127,17 @@ export const db = {
       onError && onError(error);
     });
   },
+
+  subscribeToCustomers: (onUpdate: (customers: Customer[]) => void, onError?: (err: any) => void) => {
+    const q = query(collection(dbInstance, 'customers'), orderBy('nome'));
+    return onSnapshot(q, (snapshot) => {
+      const customers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Customer));
+      onUpdate(customers);
+    }, (error) => {
+      console.error("Erro ao ouvir clientes:", error);
+      onError && onError(error);
+    });
+  },
   
   subscribeToSettings: (onUpdate: (settings: AppSettings) => void, onError?: (err: any) => void) => {
     return onSnapshot(doc(dbInstance, 'settings', 'global'), (docSnap) => {
@@ -129,6 +150,101 @@ export const db = {
       console.error("Erro ao ouvir configurações:", error);
       onError && onError(error);
     });
+  },
+
+  async saveOrUpdateCustomer(data: { nome: string; telefone: string; valorAdicional?: number; origem?: 'reserva' | 'pdv' | 'fiado' | 'manual' }, operatorName?: string, operatorId?: string): Promise<Customer | null> {
+    const cleanPhone = normalizePhone(data.telefone);
+    const cleanName = (data.nome || '').trim();
+    if (!cleanPhone && !cleanName) return null;
+
+    // Se tiver telefone, o ID é o telefone normalizado garantindo unicidade e agrupamento
+    const docId = cleanPhone || cleanName.toLowerCase().replace(/\s+/g, '_');
+    const custRef = doc(dbInstance, 'customers', docId);
+
+    try {
+      const snap = await getDoc(custRef);
+      const nowIso = new Date().toISOString();
+      const formatted = cleanPhone ? formatPhone(cleanPhone) : data.telefone;
+
+      if (snap.exists()) {
+        const existing = snap.data() as Customer;
+        const updates: any = {
+          updated_at: nowIso,
+          telefone_limpo: cleanPhone || existing.telefone_limpo || '',
+          telefone: formatted || existing.telefone || ''
+        };
+        if (cleanName && cleanName !== 'Balcão' && cleanName !== 'Sem Nome') {
+          updates.nome = cleanName;
+        }
+        if (data.valorAdicional && data.valorAdicional > 0) {
+          updates.total_pedidos = (existing.total_pedidos || 0) + 1;
+          updates.total_gasto = (existing.total_gasto || 0) + data.valorAdicional;
+        }
+        await updateDoc(custRef, updates);
+        return { ...existing, ...updates, id: docId };
+      } else {
+        const newCustomer: Customer = {
+          id: docId,
+          nome: cleanName || 'Cliente',
+          telefone: formatted || '',
+          telefone_limpo: cleanPhone || '',
+          total_pedidos: (data.valorAdicional && data.valorAdicional > 0) ? 1 : 0,
+          total_gasto: data.valorAdicional || 0,
+          created_at: nowIso,
+          updated_at: nowIso,
+          origem: data.origem || 'reserva'
+        };
+        await setDoc(custRef, newCustomer);
+        if (operatorName && operatorId) {
+          this.logAction(operatorName, operatorId, 'Novo Cliente Cadastrado', `Cliente ${newCustomer.nome} (${newCustomer.telefone}) cadastrado no sistema.`).catch(() => {});
+        }
+        return newCustomer;
+      }
+    } catch (err) {
+      console.error("Erro ao salvar/atualizar cliente:", err);
+      return null;
+    }
+  },
+
+  async getCustomerByPhone(phone: string): Promise<Customer | null> {
+    const cleanPhone = normalizePhone(phone);
+    if (!cleanPhone || cleanPhone.length < 8) return null;
+
+    try {
+      const custRef = doc(dbInstance, 'customers', cleanPhone);
+      const snap = await getDoc(custRef);
+      if (snap.exists()) {
+        return { id: snap.id, ...snap.data() } as Customer;
+      }
+
+      // Se não encontrou por ID direto, busca na coleção por telefone_limpo
+      const q = query(collection(dbInstance, 'customers'), where('telefone_limpo', '==', cleanPhone));
+      const querySnap = await getDocs(q);
+      if (!querySnap.empty) {
+        const firstDoc = querySnap.docs[0];
+        return { id: firstDoc.id, ...firstDoc.data() } as Customer;
+      }
+
+      // Busca por sufixo de 8 ou 9 dígitos caso DDD tenha sido omitido
+      const allCustomers = await getDocs(collection(dbInstance, 'customers'));
+      for (const d of allCustomers.docs) {
+        const c = d.data() as Customer;
+        const otherClean = c.telefone_limpo || normalizePhone(c.telefone);
+        if (otherClean && (otherClean.endsWith(cleanPhone) || cleanPhone.endsWith(otherClean))) {
+          return { id: d.id, ...c } as Customer;
+        }
+      }
+    } catch (err) {
+      console.warn("Erro ao buscar cliente por telefone:", err);
+    }
+    return null;
+  },
+
+  async deleteCustomer(customerId: string, customerName?: string, operatorName?: string, operatorId?: string) {
+    await deleteDoc(doc(dbInstance, 'customers', customerId));
+    if (operatorName && operatorId) {
+      await this.logAction(operatorName, operatorId, 'Exclusão de Cliente', `Cliente Removido: ${customerName || customerId}`);
+    }
   },
 
   async saveProduct(product: Partial<Product>, operatorName?: string, operatorId?: string) {
@@ -181,8 +297,13 @@ export const db = {
       status_entrega: sale.tipo_pedido === 'reserva' ? 'pendente' : 'entregue'
     };
 
-    if (sale.telefone_comprador && typeof sale.telefone_comprador === 'string' && sale.telefone_comprador.trim()) {
-      newSale.telefone_comprador = sale.telefone_comprador.trim();
+    const rawTel = sale.telefone_comprador && typeof sale.telefone_comprador === 'string' ? sale.telefone_comprador.trim() : '';
+    const cleanTel = normalizePhone(rawTel);
+    if (cleanTel) {
+      newSale.telefone_comprador = formatPhone(cleanTel) || rawTel;
+      newSale.telefone_limpo = cleanTel;
+    } else if (rawTel) {
+      newSale.telefone_comprador = rawTel;
     }
 
     batch.set(saleRef, newSale);
@@ -197,6 +318,16 @@ export const db = {
     }
     
     await batch.commit();
+
+    // Sincroniza cliente com banco de dados centralizado se tiver nome ou telefone
+    if (newSale.cliente_nome && newSale.cliente_nome !== 'Balcão' && (cleanTel || newSale.cliente_nome.length >= 2)) {
+      this.saveOrUpdateCustomer({
+        nome: newSale.cliente_nome,
+        telefone: cleanTel || newSale.telefone_comprador || '',
+        valorAdicional: Number(sale.total) || 0,
+        origem: sale.tipo_pedido === 'reserva' ? 'reserva' : (sale.paymentMethod === PaymentMethod.FIADO ? 'fiado' : 'pdv')
+      }).catch(err => console.warn("Erro ao sincronizar cliente da venda:", err));
+    }
 
     // Registra log de auditoria da venda sem bloquear
     const formaLabel = (sale.paymentMethod || '').toUpperCase();
@@ -231,23 +362,34 @@ export const db = {
 
   async updateFiadoCustomer(saleIds: string[], cliente_nome: string, telefone_comprador?: string, operatorName?: string, operatorId?: string) {
     const cleanNome = (cliente_nome || '').trim() || 'Sem Nome';
-    const cleanTel = (telefone_comprador || '').trim();
+    const rawTel = (telefone_comprador || '').trim();
+    const cleanTel = normalizePhone(rawTel);
+    const formattedTel = cleanTel ? formatPhone(cleanTel) : rawTel;
 
     const batch = writeBatch(dbInstance);
     for (const id of saleIds) {
       const sRef = doc(dbInstance, 'sales', id);
       batch.update(sRef, {
         cliente_nome: cleanNome,
-        telefone_comprador: cleanTel
+        telefone_comprador: formattedTel,
+        telefone_limpo: cleanTel || ''
       });
     }
     await batch.commit();
+
+    if (cleanNome !== 'Sem Nome' && (cleanTel || rawTel)) {
+      this.saveOrUpdateCustomer({
+        nome: cleanNome,
+        telefone: cleanTel || rawTel,
+        origem: 'fiado'
+      }, operatorName, operatorId).catch(() => {});
+    }
 
     this.logAction(
       operatorName || 'Operador',
       operatorId || '0',
       'Edição de Fiado',
-      `Dados do cliente fiado atualizados: ${cleanNome} (Tel: ${cleanTel || 'Não informado'}) em ${saleIds.length} venda(s)`
+      `Dados do cliente fiado atualizados: ${cleanNome} (Tel: ${formattedTel || 'Não informado'}) em ${saleIds.length} venda(s)`
     ).catch(err => console.error("Log fiado silenciado:", err));
   },
 

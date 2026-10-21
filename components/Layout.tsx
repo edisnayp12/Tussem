@@ -30,6 +30,7 @@ const Layout: React.FC<LayoutProps> = ({
     { id: 'home', icon: 'fa-house', label: 'Início', minRole: UserRole.COMMON },
     { id: 'venda', icon: 'fa-shopping-cart', label: 'Venda', minRole: UserRole.COMMON },
     { id: 'fiado', icon: 'fa-user-clock', label: 'Fiados', minRole: UserRole.COMMON },
+    { id: 'clientes', icon: 'fa-users', label: 'Clientes', minRole: UserRole.ADMIN },
     { id: 'kds', icon: 'fa-bell-concierge', label: 'KDS', minRole: UserRole.KDS },
     { id: 'estoque', icon: 'fa-boxes-stacked', label: 'Estoque', minRole: UserRole.ADMIN },
     { id: 'relatorios', icon: 'fa-chart-line', label: 'Relatórios', minRole: UserRole.ADMIN },

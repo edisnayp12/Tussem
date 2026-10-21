@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { Sale, PaymentMethod, AppSettings, Product, SaleItem } from '../types';
 import { QRCodeSVG } from 'qrcode.react';
 import { generateStaticPix } from '../services/pix';
+import { normalizePhone, formatPhone, getWhatsAppLink } from '../utils/phoneUtils';
 
 interface FiadoViewProps {
   fiados: Sale[];
@@ -20,23 +21,6 @@ export interface FiadoGroup {
   sales: Sale[];
   telefone?: string;
 }
-
-const normalizePhone = (phone?: string): string => {
-  if (!phone) return '';
-  let digits = phone.replace(/\D/g, '');
-  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) {
-    digits = digits.slice(2);
-  }
-  return digits;
-};
-
-const formatPhone = (val: string): string => {
-  const digits = val.replace(/\D/g, '').slice(0, 11);
-  if (digits.length <= 2) return digits;
-  if (digits.length <= 6) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
-  if (digits.length <= 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
-  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
-};
 
 const FiadoView: React.FC<FiadoViewProps> = ({ 
   fiados, 
@@ -87,13 +71,13 @@ const FiadoView: React.FC<FiadoViewProps> = ({
     const grouped: Record<string, FiadoGroup> = {};
     
     filtered.forEach(f => {
-      const normPhone = normalizePhone(f.telefone_comprador);
+      const normPhone = normalizePhone(f.telefone_comprador || (f as any).telefone_limpo);
       const rawNome = f.cliente_nome?.trim();
       const nome = rawNome && rawNome.length > 0 ? rawNome : 'Sem Nome';
       
       const groupKey = normPhone.length >= 8 
         ? `tel_${normPhone}` 
-        : `nome_${nome.toLowerCase()}_${f.id.slice(0, 4)}`;
+        : (nome !== 'Sem Nome' ? `nome_${nome.toLowerCase()}` : `sem_nome_${f.id}`);
 
       if (!grouped[groupKey]) {
         grouped[groupKey] = {
@@ -101,14 +85,14 @@ const FiadoView: React.FC<FiadoViewProps> = ({
           nome: nome,
           total: 0,
           sales: [],
-          telefone: f.telefone_comprador || ''
+          telefone: normPhone ? formatPhone(normPhone) : (f.telefone_comprador || '')
         };
       } else {
         if (nome && nome !== 'Sem Nome' && (grouped[groupKey].nome === 'Sem Nome' || nome.length > grouped[groupKey].nome.length)) {
           grouped[groupKey].nome = nome;
         }
-        if (!grouped[groupKey].telefone && f.telefone_comprador) {
-          grouped[groupKey].telefone = f.telefone_comprador;
+        if (!grouped[groupKey].telefone && (normPhone || f.telefone_comprador)) {
+          grouped[groupKey].telefone = normPhone ? formatPhone(normPhone) : f.telefone_comprador;
         }
       }
 

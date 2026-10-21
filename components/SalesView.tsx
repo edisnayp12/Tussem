@@ -1,18 +1,20 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Product, SaleItem, PaymentMethod, Sale, Category, AppSettings } from '../types';
+import { Product, SaleItem, PaymentMethod, Sale, Category, AppSettings, Customer } from '../types';
 import Scanner from './Scanner';
 import { QRCodeSVG } from 'qrcode.react';
 import { generateStaticPix } from '../services/pix';
+import { normalizePhone, formatPhone } from '../utils/phoneUtils';
 
 interface SalesViewProps {
   products: Product[];
   settings: AppSettings;
   fiados?: Sale[];
+  customers?: Customer[];
   onCompleteSale: (sale: any) => Promise<void>;
 }
 
-const SalesView: React.FC<SalesViewProps> = ({ products, settings, fiados = [], onCompleteSale }) => {
+const SalesView: React.FC<SalesViewProps> = ({ products, settings, fiados = [], customers = [], onCompleteSale }) => {
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(null);
@@ -110,23 +112,52 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, fiados = [], 
   };
 
   const isFiado = paymentMethod === PaymentMethod.FIADO;
-  const cleanPhone = customerPhone.replace(/\D/g, '');
+  const cleanPhone = normalizePhone(customerPhone);
 
-  const existingFiadoCustomers = useMemo(() => {
-    if (!fiados || fiados.length === 0) return [];
-    const map = new Map<string, { nome: string; telefone: string }>();
-    fiados.forEach(f => {
+  const availableCustomers = useMemo(() => {
+    const map = new Map<string, { nome: string; telefone: string; hasFiado?: boolean }>();
+    
+    // Clientes com fiado em aberto
+    (fiados || []).forEach(f => {
       const nome = f.cliente_nome?.trim() || '';
       const telefone = f.telefone_comprador?.trim() || '';
       if (nome && nome !== 'Sem Nome') {
-        const key = telefone ? telefone.replace(/\D/g, '') : nome.toLowerCase();
+        const clean = normalizePhone(telefone);
+        const key = clean || nome.toLowerCase();
         if (!map.has(key)) {
-          map.set(key, { nome, telefone });
+          map.set(key, { nome, telefone: clean ? formatPhone(clean) : telefone, hasFiado: true });
         }
       }
     });
-    return Array.from(map.values()).slice(0, 10);
-  }, [fiados]);
+
+    // Clientes cadastrados na base (reservas e geral)
+    (customers || []).forEach(c => {
+      const clean = c.telefone_limpo || normalizePhone(c.telefone);
+      const key = clean || c.nome.toLowerCase();
+      if (!map.has(key)) {
+        map.set(key, { nome: c.nome, telefone: clean ? formatPhone(clean) : c.telefone, hasFiado: false });
+      }
+    });
+
+    return Array.from(map.values()).slice(0, 15);
+  }, [fiados, customers]);
+
+  const handlePhoneChange = (val: string) => {
+    const formatted = formatPhone(val);
+    setCustomerPhone(formatted || val);
+    setValidationError(null);
+
+    const clean = normalizePhone(val);
+    if (clean.length >= 8) {
+      const match = availableCustomers.find(c => {
+        const cClean = normalizePhone(c.telefone);
+        return cClean && (cClean === clean || clean.endsWith(cClean) || cClean.endsWith(clean));
+      });
+      if (match && (!customerName || customerName === 'Sem Nome')) {
+        setCustomerName(match.nome);
+      }
+    }
+  };
 
   const completeSaleConfirmed = async () => {
     setIsFinishing(true);
@@ -409,14 +440,14 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, fiados = [], 
                           </span>
                         </div>
 
-                        {/* Clientes com Fiado Já em Aberto (Seleção Rápida com 1 clique) */}
-                        {existingFiadoCustomers.length > 0 && (
+                        {/* Clientes Cadastrados / Fiados em Aberto (Seleção Rápida com 1 clique) */}
+                        {availableCustomers.length > 0 && (
                           <div>
                             <span className="text-[8px] font-black uppercase text-purple-800 tracking-wider block mb-1.5 pl-1">
-                              Incluir a cliente existente no fiado:
+                              Vincular a cliente cadastrado:
                             </span>
-                            <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto">
-                              {existingFiadoCustomers.map((cust, idx) => (
+                            <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                              {availableCustomers.map((cust, idx) => (
                                 <button
                                   key={idx}
                                   type="button"
@@ -432,6 +463,11 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, fiados = [], 
                                 >
                                   <i className="fa-solid fa-user text-[8px] opacity-60"></i>
                                   <span>{cust.nome}</span>
+                                  {cust.hasFiado && (
+                                    <span className="text-[7px] bg-amber-100 text-amber-800 px-1 rounded font-black">
+                                      fiado
+                                    </span>
+                                  )}
                                   {cust.telefone && <i className="fa-brands fa-whatsapp text-green-600 text-[9px]"></i>}
                                 </button>
                               ))}
@@ -462,9 +498,9 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, fiados = [], 
                               <i className="fa-brands fa-whatsapp absolute left-4 top-1/2 -translate-y-1/2 text-green-500 text-sm"></i>
                               <input 
                                 type="tel" 
-                                placeholder="(11) 99999-9999" 
+                                placeholder="(11) 99999-9999 ou 11999999999" 
                                 value={customerPhone} 
-                                onChange={e => { setCustomerPhone(formatPhone(e.target.value)); setValidationError(null); }} 
+                                onChange={e => handlePhoneChange(e.target.value)} 
                                 disabled={isFinishing}
                                 className="w-full bg-white border border-gray-200 focus:border-purple-500 rounded-2xl pl-11 pr-4 py-3 font-bold text-xs text-purple-950 placeholder-gray-400 outline-none transition-all"
                               />
@@ -472,7 +508,7 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, fiados = [], 
                           </div>
 
                           <p className="text-[8px] font-bold text-purple-800 pl-1 leading-tight">
-                            * Não é obrigatório agora. Você também pode incluir ou alterar o nome e WhatsApp a qualquer momento na aba Fiados para cobrar.
+                            * Identifica o cliente pelo telefone independente de traços ou espaços, vinculando todas as compras à mesma conta.
                           </p>
                         </div>
                       </div>

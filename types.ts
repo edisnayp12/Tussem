@@ -103,3 +103,16 @@ export interface AuditLog {
   detalhes: string;
   data: string;
 }
+
+export interface Customer {
+  id: string; // normalizado (somente dígitos)
+  nome: string;
+  telefone: string;
+  telefone_limpo: string;
+  total_pedidos?: number;
+  total_gasto?: number;
+  total_fiado_aberto?: number;
+  created_at: string;
+  updated_at?: string;
+  origem?: 'reserva' | 'pdv' | 'fiado' | 'manual';
+}
