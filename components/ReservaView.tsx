@@ -3,6 +3,7 @@ import { Product, AppSettings, PaymentMethod } from '../types';
 import { PWAInstallButton } from './PWAInstallButton';
 import { db } from '../services/firebaseService';
 import { normalizePhone, formatPhone } from '../utils/phoneUtils';
+import { safeStorage } from '../utils/safeStorage';
 
 interface ReservaViewProps {
   products: Product[];
@@ -27,7 +28,7 @@ const ReservaView: React.FC<ReservaViewProps> = ({ products, settings, onReserve
   // Carrega dados salvos no próprio aparelho/celular na inicialização
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_CUSTOMER_KEY);
+      const saved = safeStorage.getItem(LOCAL_STORAGE_CUSTOMER_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.nome) setCustomerName(parsed.nome);
@@ -48,7 +49,7 @@ const ReservaView: React.FC<ReservaViewProps> = ({ products, settings, onReserve
     if (cleanDigits.length >= 10) {
       // 1. Primeiro verifica se coincide com o celular localmente salvo
       try {
-        const saved = localStorage.getItem(LOCAL_STORAGE_CUSTOMER_KEY);
+        const saved = safeStorage.getItem(LOCAL_STORAGE_CUSTOMER_KEY);
         if (saved) {
           const parsed = JSON.parse(saved);
           const savedClean = normalizePhone(parsed.telefone);
@@ -158,16 +159,12 @@ const ReservaView: React.FC<ReservaViewProps> = ({ products, settings, onReserve
         tipo_pedido: 'reserva'
       });
 
-      // Salva no aparelho local (localStorage) para a próxima reserva já vir pré-preenchida
-      try {
-        localStorage.setItem(LOCAL_STORAGE_CUSTOMER_KEY, JSON.stringify({
-          nome: customerName.trim(),
-          telefone: formattedTel,
-          telefone_limpo: clean
-        }));
-      } catch (err) {
-        console.warn("Aviso ao salvar cache local de cliente:", err);
-      }
+      // Salva no aparelho local (safeStorage) para a próxima reserva já vir pré-preenchida
+      safeStorage.setItem(LOCAL_STORAGE_CUSTOMER_KEY, JSON.stringify({
+        nome: customerName.trim(),
+        telefone: formattedTel,
+        telefone_limpo: clean
+      }));
 
       // Garante também o salvamento imediato na coleção de clientes do banco
       db.saveOrUpdateCustomer({
@@ -220,7 +217,7 @@ const ReservaView: React.FC<ReservaViewProps> = ({ products, settings, onReserve
                 setCustomerName('');
                 setCustomerPhone('');
                 setAutoIdentifiedName(null);
-                try { localStorage.removeItem(LOCAL_STORAGE_CUSTOMER_KEY); } catch (e) {}
+                safeStorage.removeItem(LOCAL_STORAGE_CUSTOMER_KEY);
               }}
               className="text-[9px] uppercase tracking-wider text-purple-700 hover:underline ml-2"
             >

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Product, Sale, PaymentMethod, User, AppSettings, UserRole, Customer, AuditLog } from './types';
+import { Product, Sale, PaymentMethod, User, AppSettings, UserRole, Customer, AuditLog, CashShift } from './types';
 import { db } from './services/firebaseService';
 import Layout from './components/Layout';
 import DashboardView from './components/DashboardView';
@@ -12,6 +12,9 @@ import SettingsView from './components/SettingsView';
 import LogView from './components/LogView';
 import ReservaView from './components/ReservaView';
 import KdsView from './components/KdsView';
+import CashRegisterView from './components/CashRegisterView';
+import AIAssistantModal from './components/AIAssistantModal';
+import { safeStorage } from './utils/safeStorage';
 
 const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos (600.000 ms)
 const SESSION_USER_KEY = 'cantina_user_session';
@@ -19,8 +22,8 @@ const SESSION_ACTIVITY_KEY = 'cantina_last_activity';
 
 const getInitialUser = (): User | null => {
   try {
-    const savedUser = localStorage.getItem(SESSION_USER_KEY);
-    const lastActivity = localStorage.getItem(SESSION_ACTIVITY_KEY);
+    const savedUser = safeStorage.getItem(SESSION_USER_KEY);
+    const lastActivity = safeStorage.getItem(SESSION_ACTIVITY_KEY);
     if (savedUser && lastActivity) {
       const elapsed = Date.now() - Number(lastActivity);
       if (elapsed < INACTIVITY_TIMEOUT_MS) {
@@ -33,6 +36,14 @@ const getInitialUser = (): User | null => {
   return null;
 };
 
+const getInitialTheme = (): 'light' | 'dark' => {
+  try {
+    return (safeStorage.getItem('cantina_theme') as 'light' | 'dark') || 'light';
+  } catch {
+    return 'light';
+  }
+};
+
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(getInitialUser);
   const [activeTab, setActiveTab] = useState('home');
@@ -40,9 +51,14 @@ const App: React.FC = () => {
   const [sales, setSales] = useState<Sale[]>([]);
   const [fiados, setFiados] = useState<Sale[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [shifts, setShifts] = useState<CashShift[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [logs, setLogs] = useState<AuditLog[]>([]);
-  const [settings, setSettings] = useState<AppSettings>({ cantinaName: 'TUSEMM - Maria Mulambo' });
+  const [isAIOpen, setIsAIOpen] = useState(false);
+  const [settings, setSettings] = useState<AppSettings>(() => ({ 
+    cantinaName: 'TUSEMM - Maria Mulambo',
+    tema: getInitialTheme()
+  }));
   const [isLoading, setIsLoading] = useState(true);
   const [dbStatus, setDbStatus] = useState<'healthy' | 'warning' | 'error' | 'syncing'>('healthy');
   const [lastSync, setLastSync] = useState(new Date());
@@ -50,10 +66,46 @@ const App: React.FC = () => {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [inactivityNotice, setInactivityNotice] = useState(false);
 
+  // Efeito para sincronizar e aplicar tema no DOM e meta tag
+  useEffect(() => {
+    const activeTheme = settings.tema || getInitialTheme();
+    try {
+      if (activeTheme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    } catch (e) {}
+    safeStorage.setItem('cantina_theme', activeTheme);
+    try {
+      const metaThemeColor = document.querySelector('meta[name="theme-color"]');
+      if (metaThemeColor) {
+        metaThemeColor.setAttribute('content', activeTheme === 'dark' ? '#0d081a' : '#4c1d95');
+      }
+    } catch (e) {}
+  }, [settings.tema]);
+
+  const handleToggleTheme = () => {
+    const nextTheme: 'light' | 'dark' = settings.tema === 'dark' ? 'light' : 'dark';
+    const updated: AppSettings = { ...settings, tema: nextTheme };
+    setSettings(updated);
+    try {
+      if (nextTheme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    } catch (e) {}
+    safeStorage.setItem('cantina_theme', nextTheme);
+    if (currentUser) {
+      onUpdateSettings(updated);
+    }
+  };
+
   // Logout com controle de inatividade
   const handleLogout = useCallback(async (isAuto = false) => {
-    localStorage.removeItem(SESSION_USER_KEY);
-    localStorage.removeItem(SESSION_ACTIVITY_KEY);
+    safeStorage.removeItem(SESSION_USER_KEY);
+    safeStorage.removeItem(SESSION_ACTIVITY_KEY);
     setCurrentUser(null);
     try {
       await db.logout();
@@ -74,7 +126,7 @@ const App: React.FC = () => {
       const now = Date.now();
       if (now - lastRecorded > 3000) {
         lastRecorded = now;
-        localStorage.setItem(SESSION_ACTIVITY_KEY, now.toString());
+        safeStorage.setItem(SESSION_ACTIVITY_KEY, now.toString());
       }
     };
 
@@ -83,7 +135,7 @@ const App: React.FC = () => {
 
     // Intervalo para verificar a inatividade a cada 5 segundos
     const checkInterval = setInterval(() => {
-      const last = Number(localStorage.getItem(SESSION_ACTIVITY_KEY) || Date.now());
+      const last = Number(safeStorage.getItem(SESSION_ACTIVITY_KEY) || Date.now());
       const elapsed = Date.now() - last;
       if (elapsed >= INACTIVITY_TIMEOUT_MS) {
         clearInterval(checkInterval);
@@ -111,6 +163,7 @@ const App: React.FC = () => {
     let unsubProducts: any;
     let unsubSales: any;
     let unsubCustomers: any;
+    let unsubShifts: any;
     let unsubUsers: any;
     let unsubSettings: any;
     let unsubLogs: any;
@@ -143,9 +196,14 @@ const App: React.FC = () => {
           setLastSync(new Date()); 
         }, handleError);
         unsubCustomers = db.subscribeToCustomers((c) => { setCustomers(c); setLastSync(new Date()); }, handleError);
+        unsubShifts = db.subscribeToCashShifts((sh) => { setShifts(sh); setLastSync(new Date()); }, handleError);
         unsubUsers = db.subscribeToUsers((u) => { setUsers(u); setLastSync(new Date()); }, handleError);
         unsubSettings = db.subscribeToSettings((set) => { 
-          setSettings(set); 
+          setSettings(prev => ({
+            ...prev,
+            ...set,
+            tema: set.tema || prev.tema || getInitialTheme()
+          })); 
           setLastSync(new Date()); 
           setIsLoading(false); 
         }, handleError);
@@ -169,6 +227,7 @@ const App: React.FC = () => {
       unsubProducts && unsubProducts();
       unsubSales && unsubSales();
       unsubCustomers && unsubCustomers();
+      unsubShifts && unsubShifts();
       unsubUsers && unsubUsers();
       unsubSettings && unsubSettings();
       unsubLogs && unsubLogs();
@@ -176,8 +235,8 @@ const App: React.FC = () => {
   }, [currentUser]);
 
   const saveUserSession = (user: User) => {
-    localStorage.setItem(SESSION_USER_KEY, JSON.stringify(user));
-    localStorage.setItem(SESSION_ACTIVITY_KEY, Date.now().toString());
+    safeStorage.setItem(SESSION_USER_KEY, JSON.stringify(user));
+    safeStorage.setItem(SESSION_ACTIVITY_KEY, Date.now().toString());
     setCurrentUser(user);
   };
 
@@ -239,6 +298,16 @@ const App: React.FC = () => {
   const onUpdateSettings = async (newSettings: AppSettings) => {
     if (!currentUser) return;
     setSettings(newSettings);
+    if (newSettings.tema) {
+      safeStorage.setItem('cantina_theme', newSettings.tema);
+      try {
+        if (newSettings.tema === 'dark') {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+      } catch (e) {}
+    }
     try {
       await db.saveSettings(newSettings, currentUser.nome, currentUser.id);
     } catch (e) {
@@ -317,77 +386,101 @@ const App: React.FC = () => {
     </div>
   );
 
+  const currentShift = shifts.find(s => s.status === 'aberto') || null;
+
   return (
-    <Layout 
-      activeTab={activeTab} 
-      setActiveTab={setActiveTab} 
-      onLogout={() => handleLogout(false)} 
-      settings={settings} 
-      currentUser={currentUser} 
-      dbStatus={dbStatus}
-      lastSyncAt={lastSync}
-    >
-      {activeTab === 'home' && <DashboardView sales={sales} products={products} setActiveTab={setActiveTab} />}
-      {activeTab === 'venda' && (
-        <SalesView 
-          products={products} 
-          settings={settings} 
-          fiados={fiados}
-          customers={customers}
-          onCompleteSale={handleCompleteSale} 
-        />
-      )}
-      {activeTab === 'fiado' && (
-        <FiadoView 
-          fiados={fiados} 
-          products={products}
-          settings={settings} 
-          onPayDebt={(pid, m) => db.payFiado(pid, m, currentUser?.nome, currentUser?.id)} 
-          onUpdateFiadoCustomer={async (saleIds, nome, telefone) => {
-            await db.updateFiadoCustomer(saleIds, nome, telefone, currentUser?.nome, currentUser?.id);
-          }}
-          onAddFiadoSale={handleCompleteSale}
-          onNavigateToPDV={() => setActiveTab('venda')}
-        />
-      )}
-      {activeTab === 'clientes' && (
-        <CustomersView 
-          customers={customers} 
-          sales={sales} 
-          currentUser={currentUser} 
-          onSaveCustomer={handleSaveCustomer} 
-          onDeleteCustomer={handleDeleteCustomer}
-          onSelectCustomerForSale={() => setActiveTab('venda')}
-        />
-      )}
-      {activeTab === 'estoque' && (
-        <InventoryView 
-          products={products} 
-          onUpdateProduct={(p) => db.saveProduct(p, currentUser.nome, currentUser.id)} 
-          onAddProduct={(p) => db.saveProduct(p, currentUser.nome, currentUser.id)} 
-          onDeleteProduct={(id, name) => db.deleteProduct(id, name, currentUser.nome, currentUser.id)}
-          currentUser={currentUser} 
-        />
-      )}
-      {activeTab === 'relatorios' && <ReportsView sales={sales} users={users} />}
-      {activeTab === 'kds' && <KdsView sales={sales} onUpdateSale={async (id, data) => await db.updateSale(id, data)} currentUser={currentUser} />}
-      {activeTab === 'logs' && <LogView logs={logs} />}
-      {activeTab === 'config' && (
-        <SettingsView 
-          users={users} 
-          currentUser={currentUser} 
-          settings={settings} 
-          onUpdateSettings={onUpdateSettings} 
-          onAddUser={(u) => db.saveUser(u, currentUser.nome, currentUser.id)} 
-          onRemoveUser={(id) => {
-            const u = users.find(user => user.id === id);
-            db.deleteUser(id, u?.nome || 'Desconhecido', currentUser.nome, currentUser.id);
-          }} 
-          onViewLogs={() => setActiveTab('logs')}
-          onViewCustomers={() => setActiveTab('clientes')}
-        />
-      )}
-    </Layout>
+    <>
+      <Layout 
+        activeTab={activeTab} 
+        setActiveTab={setActiveTab} 
+        onLogout={() => handleLogout(false)} 
+        settings={settings} 
+        currentUser={currentUser} 
+        dbStatus={dbStatus}
+        lastSyncAt={lastSync}
+        onToggleTheme={handleToggleTheme}
+        onOpenAI={() => setIsAIOpen(true)}
+      >
+        {activeTab === 'home' && <DashboardView sales={sales} products={products} setActiveTab={setActiveTab} />}
+        {activeTab === 'venda' && (
+          <SalesView 
+            products={products} 
+            settings={settings} 
+            fiados={fiados}
+            customers={customers}
+            onCompleteSale={handleCompleteSale} 
+          />
+        )}
+        {activeTab === 'caixa' && (
+          <CashRegisterView 
+            shifts={shifts}
+            currentShift={currentShift}
+            sales={sales}
+            currentUser={currentUser}
+          />
+        )}
+        {activeTab === 'fiado' && (
+          <FiadoView 
+            fiados={fiados} 
+            products={products}
+            settings={settings} 
+            onPayDebt={(pid, m) => db.payFiado(pid, m, currentUser?.nome, currentUser?.id)} 
+            onUpdateFiadoCustomer={async (saleIds, nome, telefone) => {
+              await db.updateFiadoCustomer(saleIds, nome, telefone, currentUser?.nome, currentUser?.id);
+            }}
+            onAddFiadoSale={handleCompleteSale}
+            onNavigateToPDV={() => setActiveTab('venda')}
+          />
+        )}
+        {activeTab === 'clientes' && (
+          <CustomersView 
+            customers={customers} 
+            sales={sales} 
+            currentUser={currentUser} 
+            onSaveCustomer={handleSaveCustomer} 
+            onDeleteCustomer={handleDeleteCustomer}
+            onSelectCustomerForSale={() => setActiveTab('venda')}
+          />
+        )}
+        {activeTab === 'estoque' && (
+          <InventoryView 
+            products={products} 
+            onUpdateProduct={(p) => db.saveProduct(p, currentUser.nome, currentUser.id)} 
+            onAddProduct={(p) => db.saveProduct(p, currentUser.nome, currentUser.id)} 
+            onDeleteProduct={(id, name) => db.deleteProduct(id, name, currentUser.nome, currentUser.id)}
+            currentUser={currentUser} 
+          />
+        )}
+        {activeTab === 'relatorios' && <ReportsView sales={sales} users={users} products={products} />}
+        {activeTab === 'kds' && <KdsView sales={sales} onUpdateSale={async (id, data) => await db.updateSale(id, data)} currentUser={currentUser} />}
+        {activeTab === 'logs' && <LogView logs={logs} />}
+        {activeTab === 'config' && (
+          <SettingsView 
+            users={users} 
+            currentUser={currentUser} 
+            settings={settings} 
+            onUpdateSettings={onUpdateSettings} 
+            onAddUser={(u) => db.saveUser(u, currentUser.nome, currentUser.id)} 
+            onRemoveUser={(id) => {
+              const u = users.find(user => user.id === id);
+              db.deleteUser(id, u?.nome || 'Desconhecido', currentUser.nome, currentUser.id);
+            }} 
+            onViewLogs={() => setActiveTab('logs')}
+            onViewCustomers={() => setActiveTab('clientes')}
+          />
+        )}
+      </Layout>
+
+      <AIAssistantModal 
+        isOpen={isAIOpen}
+        onClose={() => setIsAIOpen(false)}
+        sales={sales}
+        products={products}
+        fiados={fiados}
+        customers={customers}
+        settings={settings}
+      />
+    </>
   );
 };
 

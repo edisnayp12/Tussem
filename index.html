@@ -14,8 +14,155 @@
     <meta name="description" content="Sistema Profissional de Gestão de Vendas, Estoque e Fiados Maria Mulambo." />
     <meta property="og:title" content="Cantina TUSEMM" />
     <meta property="og:description" content="Sistema Profissional de Gestão de Vendas, Estoque e Fiados Maria Mulambo." />
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+      // Global error listener to prevent cross-origin script error bubbling
+      window.addEventListener('error', function(e) {
+        if (!e.error && (!e.message || e.message === 'Script error.')) {
+          console.warn('Suppressed external script error');
+          if (e.preventDefault) e.preventDefault();
+          return true;
+        }
+      }, true);
+
+      // Pre-configure tailwind safely before or after script loads
+      window.tailwind = window.tailwind || {};
+      window.tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              tusemm: {
+                dark: '#0d081a',
+                card: '#170f2b',
+                surface: '#20143a',
+                border: '#35215c',
+                accent: '#9333ea',
+                gold: '#fbbf24'
+              }
+            }
+          }
+        }
+      };
+
+      // Prevent theme flashing on page reload
+      try {
+        var savedTheme = (typeof window !== 'undefined' && window.localStorage) ? window.localStorage.getItem('cantina_theme') : null;
+        if (savedTheme === 'dark') {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+      } catch (e) {}
+    </script>
+    <script src="https://cdn.tailwindcss.com" crossorigin="anonymous"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" crossorigin="anonymous">
+    <style>
+      /* Cantina TUSEMM Dark Palette */
+      html.dark {
+        color-scheme: dark;
+        background-color: #0d081a;
+      }
+      html.dark body {
+        background-color: #0d081a !important;
+        color: #ede9fe !important;
+      }
+      html.dark .bg-gray-50 {
+        background-color: #120b22 !important;
+      }
+      html.dark .bg-white {
+        background-color: #170f2b !important;
+        color: #f5f3ff !important;
+      }
+      html.dark .border-gray-100,
+      html.dark .border-gray-200 {
+        border-color: rgba(147, 51, 234, 0.22) !important;
+      }
+      html.dark .text-purple-950,
+      html.dark .text-purple-900 {
+        color: #f3e8ff !important;
+      }
+      html.dark .text-gray-900,
+      html.dark .text-gray-800,
+      html.dark .text-gray-700 {
+        color: #ddd6fe !important;
+      }
+      html.dark .text-gray-600,
+      html.dark .text-gray-500 {
+        color: #c4b5fd !important;
+      }
+      html.dark .text-gray-400 {
+        color: #a78bfa !important;
+      }
+      html.dark .bg-purple-50 {
+        background-color: #261647 !important;
+      }
+      html.dark .text-purple-600,
+      html.dark .text-purple-700 {
+        color: #c084fc !important;
+      }
+      html.dark .hover\:bg-gray-50:hover,
+      html.dark .hover\:bg-gray-100:hover {
+        background-color: #241644 !important;
+      }
+      html.dark input,
+      html.dark select,
+      html.dark textarea {
+        background-color: #20143a !important;
+        color: #ffffff !important;
+        border-color: rgba(168, 85, 247, 0.3) !important;
+      }
+      html.dark input::placeholder,
+      html.dark textarea::placeholder {
+        color: rgba(196, 181, 253, 0.45) !important;
+      }
+      /* Keep brand headers and buttons vibrant */
+      html.dark .bg-purple-900,
+      html.dark .bg-purple-950 {
+        background-color: #2b115e !important;
+      }
+      html.dark .bg-purple-100 {
+        background-color: #2d1852 !important;
+        color: #e9d5ff !important;
+      }
+      html.dark .bg-purple-200 {
+        background-color: #3d1c73 !important;
+        color: #f3e8ff !important;
+      }
+      html.dark .bg-gray-100 {
+        background-color: #1e1338 !important;
+        color: #ddd6fe !important;
+      }
+      html.dark .bg-gray-200 {
+        background-color: #28194b !important;
+        color: #e9d5ff !important;
+      }
+      html.dark table thead th {
+        background-color: #1a0f32 !important;
+        color: #c4b5fd !important;
+      }
+      html.dark tr.border-b {
+        border-color: rgba(147, 51, 234, 0.15) !important;
+      }
+      /* Custom scrollbars */
+      html.dark ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      html.dark ::-webkit-scrollbar-track {
+        background: #0d081a;
+      }
+      html.dark ::-webkit-scrollbar-thumb {
+        background: #3b1f6d;
+        border-radius: 4px;
+      }
+      html.dark ::-webkit-scrollbar-thumb:hover {
+        background: #581c87;
+      }
+      /* Custom smooth theme transition */
+      body, .bg-white, .bg-gray-50, nav, header {
+        transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+      }
+    </style>
 </head>
 <body class="bg-gray-50 text-gray-900 font-sans antialiased overflow-x-hidden">
     <div id="root"></div>

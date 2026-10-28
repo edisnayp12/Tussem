@@ -42,6 +42,7 @@ export interface AppSettings {
   pixTitular?: string;
   pixCidade?: string;
   categoriasPersonalizadas?: string[];
+  tema?: 'light' | 'dark';
 }
 
 export interface Product {
@@ -55,6 +56,7 @@ export interface Product {
   codigo?: string;
   codigo_barras?: string;
   estoque_minimo?: number;
+  preco_custo?: number;
   created_at?: string;
 }
 
@@ -116,3 +118,38 @@ export interface Customer {
   updated_at?: string;
   origem?: 'reserva' | 'pdv' | 'fiado' | 'manual';
 }
+
+export interface CashMovement {
+  id: string;
+  tipo: 'sangria' | 'suprimento';
+  valor: number;
+  motivo: string;
+  data: string;
+  operador_nome: string;
+  operador_id: string;
+}
+
+export interface CashShift {
+  id: string;
+  status: 'aberto' | 'fechado';
+  aberto_em: string;
+  aberto_por_nome: string;
+  aberto_por_id: string;
+  valor_abertura: number; // Fundo de troco inicial
+  fechado_em?: string;
+  fechado_por_nome?: string;
+  fechado_por_id?: string;
+  valor_fechamento_informado?: number; // Valor contado em dinheiro
+  valor_fechamento_calculado?: number; // Valor esperado em dinheiro
+  diferenca?: number; // Sobra (+) ou falta (-)
+  observacoes_fechamento?: string;
+  movimentacoes?: CashMovement[];
+  total_vendas_dinheiro?: number;
+  total_vendas_pix?: number;
+  total_vendas_debito?: number;
+  total_vendas_credito?: number;
+  total_vendas_fiado?: number;
+  total_sangrias?: number;
+  total_suprimentos?: number;
+}
+

@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Sale, User, UserRole, PaymentMethod } from '../types';
+import { playOrderAlert } from '../utils/soundUtils';
 
 interface KdsViewProps {
   sales: Sale[];
@@ -10,6 +11,7 @@ interface KdsViewProps {
 const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) => {
   const isAdmin = currentUser?.perfil === UserRole.ADMIN || currentUser?.id === 'super-admin';
   const [showAll, setShowAll] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
 
   // Filtra as vendas com base nas permissões/configurações
   const kdsSales = sales.filter(s => {
@@ -21,9 +23,31 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
 
   // Separa em pendentes de entrega e já entregues (recentes)
   const pendingDeliveries = kdsSales.filter(s => s.status_entrega !== 'entregue' && s.tipo_pedido === 'reserva');
+  const prevCountRef = useRef(pendingDeliveries.length);
+
+  // Alerta sonoro quando entra nova reserva
+  useEffect(() => {
+    if (pendingDeliveries.length > prevCountRef.current) {
+      if (soundEnabled) {
+        playOrderAlert();
+      }
+    }
+    prevCountRef.current = pendingDeliveries.length;
+  }, [pendingDeliveries.length, soundEnabled]);
   
   // Mostrar também balcão no all
   const allOtherSales = kdsSales.filter(s => s.status_entrega === 'entregue' || s.tipo_pedido !== 'reserva');
+
+  const getWaitBadge = (createdAt: string) => {
+    const diffMin = Math.floor((Date.now() - new Date(createdAt).getTime()) / 60000);
+    if (diffMin < 10) {
+      return { text: `Há ${diffMin}m`, cls: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300' };
+    }
+    if (diffMin < 20) {
+      return { text: `Há ${diffMin}m`, cls: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300' };
+    }
+    return { text: `⚠️ Há ${diffMin}m`, cls: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300 animate-pulse font-black' };
+  };
 
   const handleConfirmDelivery = async (saleId: string) => {
     try {
@@ -43,41 +67,63 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="bg-purple-900 text-white p-8 rounded-[40px] shadow-xl flex justify-between items-center">
+      <div className="bg-purple-900 text-white p-6 sm:p-8 rounded-[40px] shadow-xl flex flex-col sm:flex-row justify-between sm:items-center gap-4">
         <div>
           <h2 className="text-2xl font-black uppercase tracking-tight">KDS - Cozinha e Entregas</h2>
-          <p className="opacity-60 text-[10px] font-bold uppercase mt-1">Gerenciamento de Reservas</p>
+          <p className="opacity-60 text-[10px] font-bold uppercase mt-1">Gerenciamento de Pedidos e Reservas em Tempo Real</p>
         </div>
-        {isAdmin && (
-          <div className="flex items-center gap-3 bg-white/10 p-3 rounded-2xl">
-            <span className="text-[10px] font-black uppercase">Mostrar Todos</span>
-            <button 
-              onClick={() => setShowAll(!showAll)}
-              className={`w-12 h-6 rounded-full transition-colors relative ${showAll ? 'bg-green-500' : 'bg-gray-500'}`}
-            >
-              <div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-all ${showAll ? 'left-7' : 'left-1'}`}></div>
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setSoundEnabled(!soundEnabled)}
+            className={`px-3 py-2 rounded-2xl text-[10px] font-black uppercase transition-all flex items-center gap-2 border ${
+              soundEnabled
+                ? 'bg-amber-400 text-purple-950 border-amber-300 shadow-md'
+                : 'bg-white/10 text-white/70 border-white/20'
+            }`}
+          >
+            <i className={`fa-solid ${soundEnabled ? 'fa-bell' : 'fa-bell-slash'}`}></i>
+            <span>{soundEnabled ? 'Alerta Sonoro Ativo' : 'Som Mudo'}</span>
+          </button>
+          {isAdmin && (
+            <div className="flex items-center gap-3 bg-white/10 p-2.5 rounded-2xl">
+              <span className="text-[10px] font-black uppercase">Todos</span>
+              <button 
+                onClick={() => setShowAll(!showAll)}
+                className={`w-12 h-6 rounded-full transition-colors relative ${showAll ? 'bg-green-500' : 'bg-gray-500'}`}
+              >
+                <div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-all ${showAll ? 'left-7' : 'left-1'}`}></div>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="space-y-4">
-        <h3 className="text-sm font-black text-purple-900 uppercase ml-2 border-b-2 border-purple-100 pb-2 inline-block">Reservas Pendentes ({pendingDeliveries.length})</h3>
+        <h3 className="text-sm font-black text-purple-900 dark:text-purple-200 uppercase ml-2 border-b-2 border-purple-100 dark:border-purple-900 pb-2 inline-block">
+          Reservas Pendentes ({pendingDeliveries.length})
+        </h3>
         
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {pendingDeliveries.map(sale => (
-            <div key={sale.id} className="bg-white p-6 rounded-3xl shadow-sm border border-orange-200 relative overflow-hidden flex flex-col">
-              <div className="absolute top-0 right-0 bg-orange-100 text-orange-700 px-4 py-2 rounded-bl-3xl font-black text-[10px] uppercase">
-                Aguardando
-              </div>
-              
-              <div className="mb-4 pr-16">
-                <h4 className="font-black text-purple-950 uppercase text-lg">{sale.cliente_nome}</h4>
-                <p className="text-[10px] font-bold text-gray-500 flex items-center gap-1 mt-1">
-                  <i className="fa-brands fa-whatsapp text-green-500"></i> {sale.telefone_comprador || 'Sem telefone'}
-                </p>
-                <p className="text-[9px] font-bold text-gray-400 mt-1">{new Date(sale.created_at).toLocaleString()}</p>
-              </div>
+          {pendingDeliveries.map(sale => {
+            const badge = getWaitBadge(sale.created_at);
+            return (
+              <div key={sale.id} className="bg-white dark:bg-[#160e2b] p-6 rounded-3xl shadow-sm border border-orange-200 dark:border-purple-900/60 relative overflow-hidden flex flex-col">
+                <div className="absolute top-0 right-0 flex items-center">
+                  <span className={`px-3 py-1 rounded-bl-2xl font-black text-[9px] uppercase ${badge.cls}`}>
+                    {badge.text}
+                  </span>
+                  <span className="bg-orange-100 dark:bg-orange-950/80 text-orange-700 dark:text-orange-300 px-3 py-1 font-black text-[9px] uppercase">
+                    Aguardando
+                  </span>
+                </div>
+                
+                <div className="mb-4 pr-16">
+                  <h4 className="font-black text-purple-950 dark:text-white uppercase text-lg">{sale.cliente_nome}</h4>
+                  <p className="text-[10px] font-bold text-gray-500 dark:text-gray-400 flex items-center gap-1 mt-1">
+                    <i className="fa-brands fa-whatsapp text-green-500"></i> {sale.telefone_comprador || 'Sem telefone'}
+                  </p>
+                  <p className="text-[9px] font-bold text-gray-400 mt-1">{new Date(sale.created_at).toLocaleString()}</p>
+                </div>
 
               <div className="bg-gray-50 p-4 rounded-2xl flex-1 mb-4 border border-gray-100">
                 <ul className="space-y-2">
@@ -124,8 +170,9 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
                 )}
               </div>
             </div>
-          ))}
-          {pendingDeliveries.length === 0 && (
+          );
+        })}
+        {pendingDeliveries.length === 0 && (
             <div className="col-span-full text-center py-16 bg-white rounded-[32px] border border-gray-100 shadow-sm">
                <i className="fa-solid fa-check-double text-5xl mb-4 text-green-400"></i>
                <p className="text-sm font-black uppercase tracking-widest text-gray-500">Nenhuma reserva pendente</p>

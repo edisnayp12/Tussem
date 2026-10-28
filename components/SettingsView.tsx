@@ -4,6 +4,8 @@ import { User, AppSettings, UserRole } from '../types';
 import { db } from '../services/firebaseService';
 import { storageService } from '../services/storageService';
 
+import { safeStorage } from '../utils/safeStorage';
+
 interface SettingsViewProps {
   users: User[];
   currentUser: User | null;
@@ -18,10 +20,29 @@ interface SettingsViewProps {
 const SettingsView: React.FC<SettingsViewProps> = ({ users, currentUser, settings, onUpdateSettings, onAddUser, onRemoveUser, onViewLogs, onViewCustomers }) => {
   const [dbHealth, setDbHealth] = useState<any>({});
   const [appSettings, setAppSettings] = useState(settings);
+  const [themeNotice, setThemeNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setAppSettings(settings);
   }, [settings]);
+
+  const activeTheme = appSettings.tema || (safeStorage.getItem('cantina_theme') as 'light' | 'dark') || 'light';
+
+  const handleSelectTheme = (newTheme: 'light' | 'dark') => {
+    const updated = { ...appSettings, tema: newTheme };
+    setAppSettings(updated);
+    try {
+      if (newTheme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    } catch (e) {}
+    safeStorage.setItem('cantina_theme', newTheme);
+    onUpdateSettings(updated);
+    setThemeNotice(newTheme === 'dark' ? 'Tema Escuro (TUSEMM Noite) ativado com sucesso!' : 'Tema Claro ativado com sucesso!');
+    setTimeout(() => setThemeNotice(null), 3000);
+  };
   
   useEffect(() => {
     refreshHealth();
@@ -77,6 +98,104 @@ const SettingsView: React.FC<SettingsViewProps> = ({ users, currentUser, setting
         <button onClick={refreshHealth} className="bg-purple-100 text-purple-600 p-3 rounded-xl hover:bg-purple-200">
           <i className="fa-solid fa-rotate"></i>
         </button>
+      </div>
+
+      {/* Seletor de Tema (Aparência) */}
+      <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-6">
+          <div>
+            <h3 className="text-sm font-black text-purple-900 uppercase flex items-center gap-2">
+              <i className="fa-solid fa-palette text-purple-600"></i> Aparência e Tema
+            </h3>
+            <p className="text-[10px] text-gray-500 font-bold uppercase mt-1">
+              Alterne as cores visuais mantendo a identidade da Cantina TUSEMM
+            </p>
+          </div>
+          <span className="self-start sm:self-auto text-[9px] font-black px-3 py-1.5 rounded-full uppercase bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-200 border border-purple-200 dark:border-purple-800">
+            {activeTheme === 'dark' ? '🌙 Modo Noite Ativo' : '☀️ Modo Dia Ativo'}
+          </span>
+        </div>
+
+        {themeNotice && (
+          <div className="mb-4 p-3 bg-green-50 dark:bg-green-950/60 border border-green-200 dark:border-green-800 text-green-800 dark:text-green-200 rounded-2xl text-xs font-bold flex items-center gap-2 animate-in fade-in">
+            <i className="fa-solid fa-circle-check text-green-600 dark:text-green-400"></i>
+            {themeNotice}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Opção Claro */}
+          <button
+            type="button"
+            onClick={() => handleSelectTheme('light')}
+            className={`flex flex-col p-5 rounded-2xl border-2 text-left transition-all relative overflow-hidden active:scale-98 ${
+              activeTheme === 'light'
+                ? 'border-purple-600 bg-purple-50/50 shadow-md ring-2 ring-purple-400/20'
+                : 'border-gray-200 hover:border-purple-300 bg-gray-50'
+            }`}
+          >
+            {activeTheme === 'light' && (
+              <span className="absolute top-3 right-3 text-purple-700 bg-purple-200 rounded-full w-6 h-6 flex items-center justify-center text-xs font-black shadow-sm">
+                <i className="fa-solid fa-check"></i>
+              </span>
+            )}
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-amber-500 text-lg shadow-sm">
+                <i className="fa-solid fa-sun"></i>
+              </div>
+              <div>
+                <span className="text-xs font-black uppercase text-gray-900 block">Tema Claro</span>
+                <span className="text-[9px] text-gray-500 font-bold uppercase">Padrão Luminoso</span>
+              </div>
+            </div>
+            <p className="text-[11px] text-gray-600 leading-snug">
+              Fundo claro suave, cards brancos nítidos e a clássica identidade roxa da Cantina TUSEMM.
+            </p>
+            <div className="mt-4 flex gap-1.5 items-center p-2 rounded-xl bg-white border border-gray-200">
+              <div className="w-4 h-4 rounded-full bg-purple-900" title="Roxo TUSEMM"></div>
+              <div className="w-4 h-4 rounded-full bg-amber-400" title="Dourado"></div>
+              <div className="w-4 h-4 rounded-full bg-emerald-500" title="Verde"></div>
+              <div className="w-4 h-4 rounded-full bg-gray-100 border border-gray-300"></div>
+              <span className="text-[8px] font-black text-gray-500 uppercase ml-auto">Paleta Dia</span>
+            </div>
+          </button>
+
+          {/* Opção Escuro */}
+          <button
+            type="button"
+            onClick={() => handleSelectTheme('dark')}
+            className={`flex flex-col p-5 rounded-2xl border-2 text-left transition-all relative overflow-hidden active:scale-98 ${
+              activeTheme === 'dark'
+                ? 'border-purple-500 bg-[#1c1236] shadow-md ring-2 ring-purple-500/30'
+                : 'border-gray-200 hover:border-purple-400 bg-gray-50'
+            }`}
+          >
+            {activeTheme === 'dark' && (
+              <span className="absolute top-3 right-3 text-white bg-purple-600 rounded-full w-6 h-6 flex items-center justify-center text-xs font-black shadow-md">
+                <i className="fa-solid fa-check"></i>
+              </span>
+            )}
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-[#0e081c] border border-purple-800/60 flex items-center justify-center text-purple-300 text-lg shadow-sm">
+                <i className="fa-solid fa-moon"></i>
+              </div>
+              <div>
+                <span className="text-xs font-black uppercase text-purple-950 dark:text-purple-100 block">Tema Escuro</span>
+                <span className="text-[9px] text-purple-600 dark:text-purple-300 font-bold uppercase">TUSEMM Noite</span>
+              </div>
+            </div>
+            <p className="text-[11px] text-gray-600 dark:text-purple-200/80 leading-snug">
+              Fundo preto-violeta profundo, alto contraste e conforto visual sem perder o brilho da marca.
+            </p>
+            <div className="mt-4 flex gap-1.5 items-center p-2 rounded-xl bg-[#140c26] border border-purple-900/50">
+              <div className="w-4 h-4 rounded-full bg-[#3b1275]" title="Roxo Meia-Noite"></div>
+              <div className="w-4 h-4 rounded-full bg-amber-400" title="Dourado"></div>
+              <div className="w-4 h-4 rounded-full bg-emerald-400" title="Verde"></div>
+              <div className="w-4 h-4 rounded-full bg-[#0d081a] border border-purple-800"></div>
+              <span className="text-[8px] font-black text-purple-300 uppercase ml-auto">Paleta Noite</span>
+            </div>
+          </button>
+        </div>
       </div>
 
       <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100">

@@ -1,19 +1,31 @@
 
-import { Sale, PaymentMethod, User } from '../types';
+import { Sale, PaymentMethod, User, Product } from '../types';
 import React, { useState, useMemo } from 'react';
 
 interface ReportsViewProps {
   sales: Sale[];
   users: User[];
+  products?: Product[];
 }
 
-const ReportsView: React.FC<ReportsViewProps> = ({ sales, users }) => {
+const ReportsView: React.FC<ReportsViewProps> = ({ sales, users, products = [] }) => {
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
   const [viewMode, setViewMode] = useState<'daily' | 'monthly'>('daily');
   const [filterDate, setFilterDate] = useState(new Date().toLocaleDateString('en-CA'));
   const [filterMonth, setFilterMonth] = useState(new Date().toISOString().slice(0, 7));
   const [filterUser, setFilterUser] = useState<string>('todos');
   const [filterPayment, setFilterPayment] = useState<string>('todos');
+
+  const productCostMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    products.forEach(p => {
+      if (p.preco_custo !== undefined && p.preco_custo > 0) {
+        map[p.id] = p.preco_custo;
+        map[p.nome.trim().toLowerCase()] = p.preco_custo;
+      }
+    });
+    return map;
+  }, [products]);
 
   const filteredSales = useMemo(() => {
     return sales.filter(s => {
@@ -34,11 +46,27 @@ const ReportsView: React.FC<ReportsViewProps> = ({ sales, users }) => {
     return filteredSales.reduce((acc, s) => {
       const val = Number(s.valor_total) || 0;
       acc.total += val;
-      if (s.status === 'pago') acc.recebido += val;
-      else acc.pendente += val;
+      if (s.status === 'pago') {
+        acc.recebido += val;
+      } else {
+        acc.pendente += val;
+      }
+
+      // Cálculo de Custo das Mercadorias Vendidas (CMV)
+      if (s.itens && s.itens.length > 0) {
+        s.itens.forEach(it => {
+          const unitCost = it.preco_custo || productCostMap[it.produto_id] || productCostMap[it.nome?.trim().toLowerCase()] || 0;
+          const qty = it.quantidade || 1;
+          acc.custoTotal += unitCost * qty;
+        });
+      }
+
       return acc;
-    }, { total: 0, recebido: 0, pendente: 0 });
-  }, [filteredSales]);
+    }, { total: 0, recebido: 0, pendente: 0, custoTotal: 0 });
+  }, [filteredSales, productCostMap]);
+
+  const lucroBruto = Math.max(0, stats.recebido - stats.custoTotal);
+  const margemLucro = stats.recebido > 0 ? (lucroBruto / stats.recebido) * 100 : 0;
 
   const downloadCSV = () => {
     const headers = ['Data', 'Hora', 'Cliente', 'Tipo de Venda', 'Produto', 'Quantidade', 'Preço Unitário (R$)', 'Subtotal (R$)', 'Total da Venda (R$)', 'Forma de Pagamento', 'Status'];
@@ -141,18 +169,25 @@ const ReportsView: React.FC<ReportsViewProps> = ({ sales, users }) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white p-6 rounded-[32px] shadow-sm border-l-4 border-purple-900">
-          <span className="text-[9px] font-black text-gray-400 uppercase">Total Bruto</span>
-          <p className="text-2xl font-black text-purple-950">R$ {stats.total.toFixed(2)}</p>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="bg-white dark:bg-[#160e2b] p-5 rounded-[28px] shadow-sm border-l-4 border-purple-900 dark:border-purple-600 border border-gray-100 dark:border-purple-900/30">
+          <span className="text-[9px] font-black text-gray-400 dark:text-purple-300/70 uppercase">Total Bruto</span>
+          <p className="text-xl md:text-2xl font-black text-purple-950 dark:text-purple-100">R$ {stats.total.toFixed(2)}</p>
         </div>
-        <div className="bg-white p-6 rounded-[32px] shadow-sm border-l-4 border-green-500">
-          <span className="text-[9px] font-black text-gray-400 uppercase">Total Recebido</span>
-          <p className="text-2xl font-black text-green-600">R$ {stats.recebido.toFixed(2)}</p>
+        <div className="bg-white dark:bg-[#160e2b] p-5 rounded-[28px] shadow-sm border-l-4 border-green-500 border border-gray-100 dark:border-purple-900/30">
+          <span className="text-[9px] font-black text-gray-400 dark:text-purple-300/70 uppercase">Recebido (Caixa)</span>
+          <p className="text-xl md:text-2xl font-black text-green-600 dark:text-green-400">R$ {stats.recebido.toFixed(2)}</p>
         </div>
-        <div className="bg-white p-6 rounded-[32px] shadow-sm border-l-4 border-red-500">
-          <span className="text-[9px] font-black text-gray-400 uppercase">Fiados Pendentes</span>
-          <p className="text-2xl font-black text-red-600">R$ {stats.pendente.toFixed(2)}</p>
+        <div className="bg-white dark:bg-[#160e2b] p-5 rounded-[28px] shadow-sm border-l-4 border-amber-500 border border-gray-100 dark:border-purple-900/30">
+          <span className="text-[9px] font-black text-gray-400 dark:text-purple-300/70 uppercase">Lucro Estimado</span>
+          <p className="text-xl md:text-2xl font-black text-amber-600 dark:text-amber-400">
+            R$ {lucroBruto.toFixed(2)}
+            <span className="text-[10px] font-bold ml-1 opacity-70">({margemLucro.toFixed(0)}%)</span>
+          </p>
+        </div>
+        <div className="bg-white dark:bg-[#160e2b] p-5 rounded-[28px] shadow-sm border-l-4 border-red-500 border border-gray-100 dark:border-purple-900/30">
+          <span className="text-[9px] font-black text-gray-400 dark:text-purple-300/70 uppercase">Fiados Pendentes</span>
+          <p className="text-xl md:text-2xl font-black text-red-600 dark:text-red-400">R$ {stats.pendente.toFixed(2)}</p>
         </div>
       </div>
 

@@ -12,7 +12,7 @@ import {
 } from 'firebase/firestore';
 
 import firebaseConfig from '../firebase-applet-config.json';
-import { Product, Sale, PaymentMethod, SaleItem, User, UserRole, AppSettings, Customer } from '../types';
+import { Product, Sale, PaymentMethod, SaleItem, User, UserRole, AppSettings, Customer, CashShift, CashMovement } from '../types';
 import { normalizePhone, formatPhone } from '../utils/phoneUtils';
 
 const app = initializeApp(firebaseConfig);
@@ -505,5 +505,87 @@ export const db = {
       console.error("Erro ao ouvir logs:", error);
       onError && onError(error);
     });
+  },
+
+  subscribeToCashShifts: (onUpdate: (shifts: CashShift[]) => void, onError?: (err: any) => void) => {
+    const q = query(collection(dbInstance, 'cash_shifts'), limit(100));
+    return onSnapshot(q, (snapshot) => {
+      const shifts = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as CashShift));
+      shifts.sort((a, b) => new Date(b.aberto_em).getTime() - new Date(a.aberto_em).getTime());
+      onUpdate(shifts);
+    }, (error) => {
+      console.error("Erro ao ouvir turnos de caixa:", error);
+      onError && onError(error);
+    });
+  },
+
+  async openCashShift(valorAbertura: number, operadorNome: string, operadorId: string): Promise<CashShift> {
+    const shiftRef = doc(collection(dbInstance, 'cash_shifts'));
+    const newShift: CashShift = {
+      id: shiftRef.id,
+      status: 'aberto',
+      aberto_em: new Date().toISOString(),
+      aberto_por_nome: operadorNome,
+      aberto_por_id: operadorId,
+      valor_abertura: Number(valorAbertura) || 0,
+      movimentacoes: [],
+      total_sangrias: 0,
+      total_suprimentos: 0
+    };
+    await setDoc(shiftRef, newShift);
+    await this.logAction(operadorNome, operadorId, 'Abertura de Caixa', `Turno de caixa aberto com troco inicial de R$ ${(Number(valorAbertura) || 0).toFixed(2)}`);
+    return newShift;
+  },
+
+  async addCashMovement(shiftId: string, tipo: 'sangria' | 'suprimento', valor: number, motivo: string, operadorNome: string, operadorId: string) {
+    const shiftRef = doc(dbInstance, 'cash_shifts', shiftId);
+    const snap = await getDoc(shiftRef);
+    if (!snap.exists()) throw new Error("Turno de caixa não encontrado.");
+    const shift = snap.data() as CashShift;
+    const movement: CashMovement = {
+      id: Math.random().toString(36).substring(2, 9),
+      tipo,
+      valor: Number(valor) || 0,
+      motivo: motivo.trim() || (tipo === 'sangria' ? 'Retirada de dinheiro (Sangria)' : 'Reforço de troco (Suprimento)'),
+      data: new Date().toISOString(),
+      operador_nome: operadorNome,
+      operador_id: operadorId
+    };
+    const currentMovements = shift.movimentacoes || [];
+    const updatedMovements = [...currentMovements, movement];
+    const totalSangrias = updatedMovements.filter(m => m.tipo === 'sangria').reduce((a, b) => a + (Number(b.valor) || 0), 0);
+    const totalSuprimentos = updatedMovements.filter(m => m.tipo === 'suprimento').reduce((a, b) => a + (Number(b.valor) || 0), 0);
+
+    await updateDoc(shiftRef, {
+      movimentacoes: updatedMovements,
+      total_sangrias: totalSangrias,
+      total_suprimentos: totalSuprimentos
+    });
+
+    const label = tipo === 'sangria' ? 'Sangria de Caixa' : 'Suprimento de Caixa';
+    await this.logAction(operadorNome, operadorId, label, `R$ ${(Number(valor) || 0).toFixed(2)} - ${movement.motivo}`);
+  },
+
+  async closeCashShift(shiftId: string, valorInformado: number, valorCalculado: number, totaisVendas: any, obs: string, operadorNome: string, operadorId: string) {
+    const shiftRef = doc(dbInstance, 'cash_shifts', shiftId);
+    const diferenca = Number((valorInformado - valorCalculado).toFixed(2));
+    const updateData: Partial<CashShift> = {
+      status: 'fechado',
+      fechado_em: new Date().toISOString(),
+      fechado_por_nome: operadorNome,
+      fechado_por_id: operadorId,
+      valor_fechamento_informado: Number(valorInformado) || 0,
+      valor_fechamento_calculado: Number(valorCalculado) || 0,
+      diferenca: diferenca,
+      observacoes_fechamento: obs.trim() || undefined,
+      total_vendas_dinheiro: totaisVendas.dinheiro || 0,
+      total_vendas_pix: totaisVendas.pix || 0,
+      total_vendas_debito: totaisVendas.debito || 0,
+      total_vendas_credito: totaisVendas.credito || 0,
+      total_vendas_fiado: totaisVendas.fiado || 0
+    };
+    await updateDoc(shiftRef, updateData);
+    const diffStatus = diferenca === 0 ? 'Conferência Exata' : (diferenca > 0 ? `Sobra de R$ ${diferenca.toFixed(2)}` : `Falta de R$ ${Math.abs(diferenca).toFixed(2)}`);
+    await this.logAction(operadorNome, operadorId, 'Fechamento de Caixa', `Turno encerrado. Informado: R$ ${valorInformado.toFixed(2)} | Esperado: R$ ${valorCalculado.toFixed(2)} (${diffStatus})`);
   }
 };

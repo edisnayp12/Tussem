@@ -1,5 +1,6 @@
 
 import { Product, Sale, StockMovement, User, AppSettings } from '../types';
+import { safeStorage } from '../utils/safeStorage';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'tusemm_products',
@@ -11,44 +12,44 @@ const STORAGE_KEYS = {
 
 export const storageService = {
   getProducts: (): Product[] => {
-    const data = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
+    const data = safeStorage.getItem(STORAGE_KEYS.PRODUCTS);
     return data ? JSON.parse(data) : [];
   },
   saveProducts: (products: Product[]) => {
-    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
+    safeStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
   },
   getSales: (): Sale[] => {
-    const data = localStorage.getItem(STORAGE_KEYS.SALES);
+    const data = safeStorage.getItem(STORAGE_KEYS.SALES);
     return data ? JSON.parse(data) : [];
   },
   saveSales: (sales: Sale[]) => {
-    localStorage.setItem(STORAGE_KEYS.SALES, JSON.stringify(sales));
+    safeStorage.setItem(STORAGE_KEYS.SALES, JSON.stringify(sales));
   },
   // Fix: Module '"../types"' has no exported member 'StockHistory'. Using StockMovement instead.
   getStockHistory: (): StockMovement[] => {
-    const data = localStorage.getItem(STORAGE_KEYS.STOCK_HISTORY);
+    const data = safeStorage.getItem(STORAGE_KEYS.STOCK_HISTORY);
     return data ? JSON.parse(data) : [];
   },
   saveStockHistory: (history: StockMovement[]) => {
-    localStorage.setItem(STORAGE_KEYS.STOCK_HISTORY, JSON.stringify(history));
+    safeStorage.setItem(STORAGE_KEYS.STOCK_HISTORY, JSON.stringify(history));
   },
   
   // Usuários
   getUsers: (): User[] => {
-    const data = localStorage.getItem(STORAGE_KEYS.USERS);
+    const data = safeStorage.getItem(STORAGE_KEYS.USERS);
     return data ? JSON.parse(data) : [];
   },
   saveUsers: (users: User[]) => {
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    safeStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   },
 
   // Configurações
   getSettings: (): AppSettings => {
-    const data = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+    const data = safeStorage.getItem(STORAGE_KEYS.SETTINGS);
     return data ? JSON.parse(data) : { cantinaName: 'TUSEMM' };
   },
   saveSettings: (settings: AppSettings) => {
-    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+    safeStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
   },
   
   exportBackup: () => {
@@ -89,6 +90,6 @@ export const storageService = {
   },
 
   clearAll: () => {
-    Object.values(STORAGE_KEYS).forEach(key => localStorage.removeItem(key));
+    Object.values(STORAGE_KEYS).forEach(key => safeStorage.removeItem(key));
   }
 };

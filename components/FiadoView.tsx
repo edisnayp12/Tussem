@@ -52,6 +52,8 @@ const FiadoView: React.FC<FiadoViewProps> = ({
   const [quickCart, setQuickCart] = useState<SaleItem[]>([]);
   const [productSearch, setProductSearch] = useState('');
   const [isSubmittingSale, setIsSubmittingSale] = useState(false);
+  const [overdueFilter, setOverdueFilter] = useState<'todos' | '7dias' | '15dias' | '30dias'>('todos');
+  const [aiLoadingKey, setAiLoadingKey] = useState<string | null>(null);
 
   // Agrupamento dos fiados
   const groupedFiados = useMemo(() => {
@@ -100,8 +102,20 @@ const FiadoView: React.FC<FiadoViewProps> = ({
       grouped[groupKey].total += (Number(f.valor_total) || 0);
     });
     
-    return Object.values(grouped).sort((a,b) => a.nome.localeCompare(b.nome));
-  }, [fiados, searchTerm]);
+    let result = Object.values(grouped).sort((a,b) => a.nome.localeCompare(b.nome));
+
+    if (overdueFilter !== 'todos') {
+      const now = Date.now();
+      const minDays = overdueFilter === '7dias' ? 7 : (overdueFilter === '15dias' ? 15 : 30);
+      result = result.filter(g => {
+        const oldestSaleTime = Math.min(...g.sales.map(s => new Date(s.created_at).getTime()));
+        const days = (now - oldestSaleTime) / (1000 * 60 * 60 * 24);
+        return days >= minDays;
+      });
+    }
+
+    return result;
+  }, [fiados, searchTerm, overdueFilter]);
 
   const totalFiltered = useMemo(() => {
     return groupedFiados.reduce((acc, g) => acc + g.total, 0);
@@ -319,6 +333,41 @@ const FiadoView: React.FC<FiadoViewProps> = ({
     return `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
   };
 
+  const handleAICobrar = async (group: FiadoGroup) => {
+    const rawDigits = group.telefone?.replace(/\D/g, '') || '';
+    if (!rawDigits) return alert("Adicione um número de telefone ao cliente primeiro para enviar a cobrança.");
+    
+    setAiLoadingKey(group.key);
+    try {
+      const oldestSale = Math.min(...group.sales.map(s => new Date(s.created_at).getTime()));
+      const days = Math.max(1, Math.floor((Date.now() - oldestSale) / (1000 * 60 * 60 * 24)));
+      const itemsList = group.sales.flatMap(s => (s.itens || []).map(i => `${i.quantidade}x ${i.nome}`)).slice(0, 4).join(', ');
+
+      const res = await fetch('/api/ai/draft-message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientName: group.nome,
+          debtAmount: group.total,
+          daysOverdue: `${days} dias`,
+          items: itemsList,
+          pixKey: settings.pixChave
+        })
+      });
+      const data = await res.json();
+      let cleanPhone = rawDigits;
+      if (cleanPhone.length >= 12 && cleanPhone.startsWith('55')) {
+        cleanPhone = cleanPhone.slice(2);
+      }
+      const msg = data.message || `Olá, ${group.nome}! Passando para lembrar da sua conta na Cantina TUSEMM no valor de R$ ${group.total.toFixed(2)}. Chave PIX: ${settings.pixChave || ''}. Axé! 🙏`;
+      window.open(`https://wa.me/55${cleanPhone}?text=${encodeURIComponent(msg)}`, '_blank');
+    } catch (e: any) {
+      alert("Erro ao gerar mensagem de IA: " + e.message);
+    } finally {
+      setAiLoadingKey(null);
+    }
+  };
+
   const filteredProducts = useMemo(() => {
     const term = productSearch.trim().toLowerCase();
     if (!term) return products.slice(0, 15);
@@ -382,19 +431,43 @@ const FiadoView: React.FC<FiadoViewProps> = ({
       </div>
 
       {/* SEARCH AND FILTERS */}
-      <div className="bg-white p-5 rounded-3xl shadow-sm border border-gray-100 flex flex-col md:flex-row md:items-center gap-4 justify-between">
+      <div className="bg-white dark:bg-[#160e2b] p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-purple-900/40 flex flex-col lg:flex-row lg:items-center gap-4 justify-between">
         <div className="relative flex-1">
           <i className="fa-solid fa-search absolute left-5 top-1/2 -translate-y-1/2 text-gray-400"></i>
           <input
             type="text"
             placeholder="Buscar fiado por nome ou telefone..."
-            className="w-full bg-gray-50 border-none rounded-2xl pl-12 pr-6 py-4 text-sm font-bold text-gray-900 outline-none focus:ring-2 focus:ring-purple-500 placeholder-gray-400"
+            className="w-full bg-gray-50 dark:bg-[#20143a] border border-transparent focus:border-purple-600 rounded-2xl pl-12 pr-6 py-4 text-sm font-bold text-gray-900 dark:text-white outline-none placeholder-gray-400"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
+
+        {/* Régua de Cobrança: Filtro de Vencimento */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 flex-shrink-0">
+          <span className="text-[9px] font-black uppercase text-gray-400 dark:text-purple-300 mr-1 hidden sm:inline">Tempo:</span>
+          {[
+            { id: 'todos', label: 'Todos' },
+            { id: '7dias', label: '> 7 dias' },
+            { id: '15dias', label: '> 15 dias' },
+            { id: '30dias', label: '⚠️ > 30 dias' },
+          ].map(f => (
+            <button
+              key={f.id}
+              onClick={() => setOverdueFilter(f.id as any)}
+              className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase whitespace-nowrap transition-all ${
+                overdueFilter === f.id
+                  ? 'bg-purple-900 text-white shadow-md'
+                  : 'bg-gray-100 dark:bg-[#20143a] hover:bg-gray-200 dark:hover:bg-purple-900/40 text-gray-700 dark:text-purple-200'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+
         {searchTerm.trim() && (
-          <div className="bg-purple-50 text-purple-900 px-6 py-3 rounded-2xl flex items-center justify-between md:justify-end gap-3 whitespace-nowrap">
+          <div className="bg-purple-50 dark:bg-purple-950/60 text-purple-900 dark:text-purple-200 px-6 py-3 rounded-2xl flex items-center justify-between md:justify-end gap-3 whitespace-nowrap">
             <span className="text-[10px] font-black uppercase tracking-widest opacity-70">Resultado busca:</span>
             <span className="text-base font-black">R$ {totalFiltered.toFixed(2)}</span>
           </div>
@@ -479,17 +552,32 @@ const FiadoView: React.FC<FiadoViewProps> = ({
                   </button>
                 </div>
 
-                {/* Botão de Cobrança WhatsApp */}
+                {/* Botões de Cobrança WhatsApp e IA */}
                 {hasPhone ? (
-                  <a
-                    href={generateWhatsAppLink(group)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-xs"
-                  >
-                    <i className="fa-brands fa-whatsapp text-emerald-600 text-sm"></i>
-                    Cobrar no WhatsApp
-                  </a>
+                  <div className="grid grid-cols-2 gap-2">
+                    <a
+                      href={generateWhatsAppLink(group)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 py-2.5 rounded-2xl text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-xs"
+                    >
+                      <i className="fa-brands fa-whatsapp text-emerald-600 text-xs"></i>
+                      Cobrança Direta
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => handleAICobrar(group)}
+                      disabled={aiLoadingKey === group.key}
+                      className="bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 py-2.5 rounded-2xl text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-xs disabled:opacity-50"
+                    >
+                      {aiLoadingKey === group.key ? (
+                        <i className="fa-solid fa-spinner animate-spin text-xs"></i>
+                      ) : (
+                        <i className="fa-solid fa-wand-magic-sparkles text-purple-600 text-xs"></i>
+                      )}
+                      Cobrança IA
+                    </button>
+                  </div>
                 ) : (
                   <button
                     onClick={(e) => openEditModal(group, e)}

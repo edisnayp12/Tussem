@@ -1,4 +1,5 @@
 import { Product, Sale, PaymentMethod, SaleItem, User, UserRole, AppSettings } from '../types';
+import { safeStorage } from '../utils/safeStorage';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'tusemm_products',
@@ -10,15 +11,17 @@ const STORAGE_KEYS = {
 
 const read = (key: string) => {
   try {
-    return JSON.parse(localStorage.getItem(key) || '[]');
+    return JSON.parse(safeStorage.getItem(key) || '[]');
   } catch {
     return [];
   }
 };
 
 const write = (key: string, data: any) => {
-  localStorage.setItem(key, JSON.stringify(data));
-  window.dispatchEvent(new Event('local-db-update'));
+  safeStorage.setItem(key, JSON.stringify(data));
+  try {
+    window.dispatchEvent(new Event('local-db-update'));
+  } catch (e) {}
 };
 
 const generateId = () => {
@@ -183,7 +186,7 @@ export const db = {
 
   async getSettings(): Promise<AppSettings> {
     try {
-      const settings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+      const settings = safeStorage.getItem(STORAGE_KEYS.SETTINGS);
       return settings ? JSON.parse(settings) : { cantinaName: 'TUSEMM - Maria Mulambo' };
     } catch {
       return { cantinaName: 'TUSEMM - Maria Mulambo' };
@@ -191,8 +194,10 @@ export const db = {
   },
 
   async saveSettings(settings: AppSettings) {
-    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-    window.dispatchEvent(new Event('local-db-update'));
+    safeStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+    try {
+      window.dispatchEvent(new Event('local-db-update'));
+    } catch (e) {}
   },
 
   async addLog(usuario: string, acao: string, descricao: string) {

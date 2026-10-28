@@ -5,6 +5,8 @@ import Scanner from './Scanner';
 import { QRCodeSVG } from 'qrcode.react';
 import { generateStaticPix } from '../services/pix';
 import { normalizePhone, formatPhone } from '../utils/phoneUtils';
+import { getSaleWhatsAppReceiptLink, printSaleThermalReceipt } from '../utils/receiptUtils';
+import { playSuccessChime } from '../utils/soundUtils';
 
 interface SalesViewProps {
   products: Product[];
@@ -27,6 +29,10 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, fiados = [], 
   const [pixQrCode, setPixQrCode] = useState<string | null>(null);
   const [pixPaymentId, setPixPaymentId] = useState<string | null>(null);
   const [isPollingPix, setIsPollingPix] = useState(false);
+  const [completedReceipt, setCompletedReceipt] = useState<{
+    sale: Sale;
+    phone: string;
+  } | null>(null);
 
   const cartTotal = useMemo(() => cart.reduce((acc, item) => acc + ((item.preco_unitario || 0) * (item.quantidade || 0)), 0), [cart]);
 
@@ -168,6 +174,17 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, fiados = [], 
       const finalName = isFiado ? (customerName.trim() || 'Sem Nome') : (customerName.trim() || undefined);
       const finalPhone = customerPhone.trim() || undefined;
 
+      const receiptSale: Sale = {
+        id: `VD-${Date.now().toString().slice(-6)}`,
+        valor_total: cartTotal,
+        forma_pagamento: paymentMethod!,
+        created_at: new Date().toISOString(),
+        itens: [...cart],
+        cliente_nome: finalName || 'Cliente Balcão',
+        telefone_comprador: finalPhone,
+        status: paymentMethod === PaymentMethod.FIADO ? 'pendente' : 'pago'
+      };
+
       await onCompleteSale({
         items: cart,
         total: cartTotal,
@@ -176,6 +193,13 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, fiados = [], 
         telefone_comprador: finalPhone,
         isDebtPaid: paymentMethod !== PaymentMethod.FIADO
       });
+
+      playSuccessChime();
+      setCompletedReceipt({
+        sale: receiptSale,
+        phone: finalPhone || ''
+      });
+
       setCart([]);
       setPaymentMethod(null);
       setCustomerName('');
@@ -571,6 +595,51 @@ const SalesView: React.FC<SalesViewProps> = ({ products, settings, fiados = [], 
           </div>
           <span className="text-lg">R$ {cartTotal.toFixed(2)}</span>
         </button>
+      </div>
+    )}
+
+    {/* Modal de Comprovante de Venda Digital */}
+    {completedReceipt && (
+      <div className="fixed inset-0 bg-black/80 z-[115] flex items-center justify-center p-4 backdrop-blur-sm animate-in zoom-in-95">
+        <div className="bg-white dark:bg-[#180e2f] rounded-[36px] p-6 sm:p-8 w-full max-w-sm shadow-2xl text-center border border-purple-200 dark:border-purple-900/50">
+          <div className="w-16 h-16 rounded-3xl bg-green-100 dark:bg-green-950 text-green-600 dark:text-green-300 flex items-center justify-center text-3xl mx-auto mb-4 shadow-inner">
+            <i className="fa-solid fa-circle-check"></i>
+          </div>
+          <h3 className="text-xl font-black uppercase text-purple-950 dark:text-purple-100">Venda Registrada!</h3>
+          <p className="text-2xl font-black text-purple-700 dark:text-purple-300 mt-1">
+            R$ {Number(completedReceipt.sale.valor_total).toFixed(2)}
+          </p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 mb-6">
+            {completedReceipt.sale.cliente_nome || 'Cliente Balcão'} • {completedReceipt.sale.forma_pagamento.toUpperCase()}
+          </p>
+
+          <div className="space-y-3">
+            <a
+              href={getSaleWhatsAppReceiptLink(completedReceipt.sale, settings, completedReceipt.phone)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-4 rounded-2xl font-black text-xs uppercase shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2"
+            >
+              <i className="fa-brands fa-whatsapp text-lg"></i> Enviar Comprovante WhatsApp
+            </a>
+
+            <button
+              type="button"
+              onClick={() => printSaleThermalReceipt(completedReceipt.sale, settings)}
+              className="w-full bg-purple-50 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200 border border-purple-200 dark:border-purple-800 py-3.5 rounded-2xl font-black text-xs uppercase hover:bg-purple-100 transition-all flex items-center justify-center gap-2"
+            >
+              <i className="fa-solid fa-print"></i> Imprimir Recibo Térmico
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setCompletedReceipt(null)}
+              className="w-full bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 py-3.5 rounded-2xl font-black text-xs uppercase hover:bg-gray-200 transition-all active:scale-95 mt-2"
+            >
+              Nova Venda
+            </button>
+          </div>
+        </div>
       </div>
     )}
     </>

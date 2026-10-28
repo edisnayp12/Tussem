@@ -15,6 +15,7 @@
     "@capacitor/android": "^6.0.0",
     "@capacitor/cli": "^6.0.0",
     "@capacitor/core": "^6.0.0",
+    "@google/genai": "^2.31.0",
     "@supabase/supabase-js": "^2.97.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
