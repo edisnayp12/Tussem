@@ -17,13 +17,15 @@
     "@capacitor/core": "^6.0.0",
     "@google/genai": "^2.31.0",
     "@supabase/supabase-js": "^2.97.0",
+    "@tailwindcss/vite": "^4.3.3",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "firebase": "^12.12.1",
     "lucide-react": "^1.8.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",

@@ -104,6 +104,14 @@ const App: React.FC = () => {
 
   // Logout com controle de inatividade
   const handleLogout = useCallback(async (isAuto = false) => {
+    if (currentUser) {
+      db.logAction(
+        currentUser.nome, 
+        currentUser.id, 
+        isAuto ? 'Logout por Inatividade' : 'Logout do Sistema', 
+        isAuto ? 'Sessão encerrada automaticamente após 10 minutos de inatividade.' : `Operador ${currentUser.nome} encerrou a sessão.`
+      ).catch(() => {});
+    }
     safeStorage.removeItem(SESSION_USER_KEY);
     safeStorage.removeItem(SESSION_ACTIVITY_KEY);
     setCurrentUser(null);
@@ -115,7 +123,7 @@ const App: React.FC = () => {
     if (isAuto) {
       setInactivityNotice(true);
     }
-  }, []);
+  }, [currentUser]);
 
   // Monitoramento de inatividade (10 minutos)
   useEffect(() => {
@@ -288,7 +296,7 @@ const App: React.FC = () => {
         quantidade: Number(i.quantidade) || 1,
         subtotal: Number(i.subtotal) || 0
       }));
-      await db.createSale(data, saleItems, currentUser?.id || null);
+      await db.createSale(data, saleItems, currentUser?.id || null, currentUser?.nome);
     } catch (e: any) {
       alert("Erro ao registrar venda: " + (e.message || "Erro inesperado"));
       throw e;
@@ -323,7 +331,24 @@ const App: React.FC = () => {
     await db.deleteCustomer(customerId, customerName, currentUser?.nome, currentUser?.id);
   };
 
-  const isReservaRoute = window.location.pathname === '/reserva';
+  const pathClean = window.location.pathname.toLowerCase().replace(/\/+$/, '');
+  const isReservaRoute = 
+    pathClean === '/reserva' ||
+    window.location.hash.toLowerCase().includes('reserva') ||
+    new URLSearchParams(window.location.search).get('view') === 'reserva';
+
+  if (isReservaRoute) {
+    if (isLoading && products.length === 0) {
+      return (
+        <div className="min-h-screen bg-gray-50 dark:bg-[#0d081a] flex flex-col items-center justify-center text-purple-950 dark:text-white p-6 text-center">
+          <div className="w-16 h-16 border-4 border-purple-200 dark:border-purple-900 border-t-purple-600 rounded-full animate-spin mb-4"></div>
+          <h2 className="text-xl font-black uppercase tracking-tight">Carregando Cardápio...</h2>
+          <p className="text-xs text-gray-400 dark:text-purple-300/60 mt-1 uppercase font-bold tracking-widest">{settings.cantinaName}</p>
+        </div>
+      );
+    }
+    return <ReservaView products={products} settings={settings} onReserve={handleCompleteSale} />;
+  }
 
   if (isLoading && !currentUser) return (
     <div className="min-h-screen bg-purple-950 flex flex-col items-center justify-center text-white p-6 text-center">
@@ -335,10 +360,6 @@ const App: React.FC = () => {
       <p className="text-[10px] opacity-40 font-black uppercase tracking-[0.3em]">Conectando ao Firebase...</p>
     </div>
   );
-
-  if (isReservaRoute) {
-    return <ReservaView products={products} settings={settings} onReserve={handleCompleteSale} />;
-  }
 
   if (!currentUser) return (
     <div className="min-h-screen bg-[#0a0510] flex items-center justify-center p-6 relative overflow-hidden">
@@ -445,14 +466,14 @@ const App: React.FC = () => {
         {activeTab === 'estoque' && (
           <InventoryView 
             products={products} 
-            onUpdateProduct={(p) => db.saveProduct(p, currentUser.nome, currentUser.id)} 
-            onAddProduct={(p) => db.saveProduct(p, currentUser.nome, currentUser.id)} 
-            onDeleteProduct={(id, name) => db.deleteProduct(id, name, currentUser.nome, currentUser.id)}
-            currentUser={currentUser} 
+            onUpdateProduct={(p) => db.saveProduct(p, currentUser?.nome, currentUser?.id)} 
+            onAddProduct={(p) => db.saveProduct(p, currentUser?.nome, currentUser?.id)} 
+            onDeleteProduct={(id, name) => db.deleteProduct(id, name, currentUser?.nome || 'Operador', currentUser?.id || '0')}
+            currentUser={currentUser!} 
           />
         )}
         {activeTab === 'relatorios' && <ReportsView sales={sales} users={users} products={products} />}
-        {activeTab === 'kds' && <KdsView sales={sales} onUpdateSale={async (id, data) => await db.updateSale(id, data)} currentUser={currentUser} />}
+        {activeTab === 'kds' && <KdsView sales={sales} onUpdateSale={async (id, data) => await db.updateSale(id, data, currentUser?.nome, currentUser?.id)} currentUser={currentUser} />}
         {activeTab === 'logs' && <LogView logs={logs} />}
         {activeTab === 'config' && (
           <SettingsView 

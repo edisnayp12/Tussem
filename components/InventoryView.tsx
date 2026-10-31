@@ -63,9 +63,21 @@ const InventoryView: React.FC<InventoryViewProps> = ({ products, onUpdateProduct
 
   const handleUpdateStock = async () => {
     if (!editing) return;
+    const cleanNome = (editing.nome || '').trim();
+    if (!cleanNome) {
+      alert("O nome do produto não pode ficar em branco!");
+      return;
+    }
+    if (editing.preco === undefined || isNaN(editing.preco) || editing.preco < 0) {
+      alert("Informe um preço de venda válido!");
+      return;
+    }
     setIsSaving(true);
     try {
-      await onUpdateProduct(editing);
+      await onUpdateProduct({
+        ...editing,
+        nome: cleanNome
+      });
       setEditing(null);
     } catch (e: any) {
       alert("Erro ao atualizar produto: " + (e.message || "Erro desconhecido"));
@@ -139,8 +151,18 @@ const InventoryView: React.FC<InventoryViewProps> = ({ products, onUpdateProduct
       {editing && (
         <div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white dark:bg-[#160e2b] rounded-[40px] p-8 w-full max-w-sm shadow-2xl border border-gray-100 dark:border-purple-900/40 animate-in zoom-in-95">
-            <h3 className="text-xl font-black text-purple-950 dark:text-purple-100 uppercase mb-6">Editar {editing.nome}</h3>
+            <h3 className="text-xl font-black text-purple-950 dark:text-purple-100 uppercase mb-6">Editar Produto</h3>
             <div className="space-y-4">
+              <div>
+                <label className="text-[10px] font-black uppercase text-gray-400 dark:text-purple-300/70 mb-1 block ml-2">Nome do Produto</label>
+                <input 
+                  type="text" 
+                  placeholder="Nome do Produto / Lanche / Bebida"
+                  className="w-full bg-gray-50 dark:bg-purple-950/40 text-gray-900 dark:text-white border border-gray-200 dark:border-purple-800/40 rounded-2xl px-4 py-3 font-bold text-sm focus:outline-none focus:border-purple-600" 
+                  value={editing.nome} 
+                  onChange={e => setEditing({...editing, nome: e.target.value})} 
+                />
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[10px] font-black uppercase text-gray-400 dark:text-purple-300/70 mb-1 block ml-2">Preço Venda (R$)</label>

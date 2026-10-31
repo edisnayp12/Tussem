@@ -8,7 +8,7 @@ import {
   onSnapshot, getDocs, getDoc, setDoc, updateDoc, deleteDoc, 
   addDoc, serverTimestamp, writeBatch, initializeFirestore,
   persistentLocalCache, persistentMultipleTabManager,
-  increment
+  increment, limit
 } from 'firebase/firestore';
 
 import firebaseConfig from '../firebase-applet-config.json';
@@ -257,11 +257,17 @@ export const db = {
       }
       await setDoc(prodRef, payload, { merge: true });
       
-      if (operatorName && operatorId) {
-        // Logar sem travar a operação principal
-        this.logAction(operatorName, operatorId, product.id ? 'Edição de Produto' : 'Novo Produto', `Produto: ${product.nome || 'N/A'}`)
-          .catch(err => console.error("Log silenciado:", err));
-      }
+      const opName = operatorName || 'Operador';
+      const opId = operatorId || '0';
+      const isEdit = !!product.id;
+      const precoVenda = (Number(product.preco) || 0).toFixed(2);
+      const precoCusto = product.preco_custo !== undefined ? ` | Custo: R$ ${(Number(product.preco_custo) || 0).toFixed(2)}` : '';
+      const acao = isEdit ? 'Edição de Produto' : 'Novo Produto';
+      const detalhes = isEdit 
+        ? `Produto "${product.nome || 'Sem Nome'}" atualizado (Venda: R$ ${precoVenda}${precoCusto} | Estoque: ${product.estoque ?? 0})`
+        : `Produto "${product.nome || 'Sem Nome'}" cadastrado (Venda: R$ ${precoVenda}${precoCusto} | Estoque inicial: ${product.estoque ?? 0})`;
+
+      this.logAction(opName, opId, acao, detalhes).catch(err => console.error("Log silenciado:", err));
     } catch (e: any) {
       console.error("Firestore Save Error:", e);
       throw new Error(e.message || "Erro de permissão ou conexão.");
@@ -270,10 +276,10 @@ export const db = {
 
   async deleteProduct(productId: string, productName: string, operatorName: string, operatorId: string) {
     await deleteDoc(doc(dbInstance, 'products', productId));
-    await this.logAction(operatorName, operatorId, 'Exclusão de Produto', `Produto: ${productName}`);
+    await this.logAction(operatorName || 'Operador', operatorId || '0', 'Exclusão de Produto', `Produto excluído do estoque: ${productName || productId}`);
   },
 
-  async createSale(sale: any, items: SaleItem[], operatorId: string | null) {
+  async createSale(sale: any, items: SaleItem[], operatorId: string | null, operatorName?: string) {
     const batch = writeBatch(dbInstance);
 
     const saleRef = doc(collection(dbInstance, 'sales'));
@@ -326,15 +332,17 @@ export const db = {
         telefone: cleanTel || newSale.telefone_comprador || '',
         valorAdicional: Number(sale.total) || 0,
         origem: sale.tipo_pedido === 'reserva' ? 'reserva' : (sale.paymentMethod === PaymentMethod.FIADO ? 'fiado' : 'pdv')
-      }).catch(err => console.warn("Erro ao sincronizar cliente da venda:", err));
+      }, operatorName || 'Caixa', operatorId || '0').catch(err => console.warn("Erro ao sincronizar cliente da venda:", err));
     }
 
-    // Registra log de auditoria da venda sem bloquear
+    // Registra log de auditoria da venda com operador real
     const formaLabel = (sale.paymentMethod || '').toUpperCase();
-    const tipoOrigem = sale.tipo_pedido === 'reserva' ? 'Reserva' : 'PDV Balcão';
+    const tipoOrigem = sale.tipo_pedido === 'reserva' ? 'Reserva Online' : 'PDV Balcão';
     const acaoLabel = sale.paymentMethod === PaymentMethod.FIADO ? 'Venda Fiada Registrada' : 'Venda Concluída';
+    const opNome = operatorName || (sale.tipo_pedido === 'reserva' ? `Reserva (${newSale.cliente_nome})` : 'Caixa Balcão');
+
     this.logAction(
-      newSale.cliente_nome || 'Caixa Balcão',
+      opNome,
       operatorId || '0',
       acaoLabel,
       `[${tipoOrigem}] R$ ${(Number(sale.total) || 0).toFixed(2)} (${formaLabel}) - Cliente: ${newSale.cliente_nome}`
@@ -356,8 +364,23 @@ export const db = {
     ).catch(err => console.error("Log fiado silenciado:", err));
   },
 
-  async updateSale(pedidoId: string, data: any) {
+  async updateSale(pedidoId: string, data: any, operatorName?: string, operatorId?: string) {
     await updateDoc(doc(dbInstance, 'sales', pedidoId), data);
+    if (data.status_entrega === 'entregue') {
+      this.logAction(
+        operatorName || 'Cozinha / KDS',
+        operatorId || '0',
+        'Entrega Confirmada',
+        `Pedido #${pedidoId.slice(-6).toUpperCase()} marcado como entregue.`
+      ).catch(() => {});
+    } else if (data.status === 'pago') {
+      this.logAction(
+        operatorName || 'Cozinha / KDS',
+        operatorId || '0',
+        'Baixa de Pagamento',
+        `Pedido #${pedidoId.slice(-6).toUpperCase()} marcado como pago.`
+      ).catch(() => {});
+    }
   },
 
   async updateFiadoCustomer(saleIds: string[], cliente_nome: string, telefone_comprador?: string, operatorName?: string, operatorId?: string) {
@@ -462,17 +485,21 @@ export const db = {
   async logAction(userName: string, userId: string, action: string, details: string) {
     try {
       const logRef = doc(collection(dbInstance, 'logs'));
+      const nowIso = new Date().toISOString();
       const logData = {
         id: logRef.id,
         usuario_nome: userName || 'Sistema',
         usuario_id: userId || '0',
         acao: action,
         detalhes: details,
-        data: new Date().toISOString()
+        data: nowIso,
+        created_at: nowIso
       };
       await setDoc(logRef, logData);
+      return logData;
     } catch (e) {
       console.error("Erro ao registrar log de auditoria:", e);
+      return null;
     }
   },
 
