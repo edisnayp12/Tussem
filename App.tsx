@@ -443,7 +443,9 @@ const App: React.FC = () => {
         {activeTab === 'fiado' && (
           <FiadoView 
             fiados={fiados} 
-            products={products}
+            allSales={sales}
+            customers={customers}
+            products={products} 
             settings={settings} 
             onPayDebt={(pid, m) => db.payFiado(pid, m, currentUser?.nome, currentUser?.id)} 
             onUpdateFiadoCustomer={async (saleIds, nome, telefone) => {
