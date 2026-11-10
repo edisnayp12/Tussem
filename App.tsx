@@ -453,6 +453,14 @@ const App: React.FC = () => {
             }}
             onAddFiadoSale={handleCompleteSale}
             onNavigateToPDV={() => setActiveTab('venda')}
+            onLogBatchDispatch={async (count, total) => {
+              await db.logAction(
+                currentUser?.nome || 'Operador', 
+                currentUser?.id || '0', 
+                'Cobrança em Massa de Fiados', 
+                `Disparo de cobrança WhatsApp para ${count} cliente(s) no total de R$ ${total.toFixed(2)}`
+              );
+            }}
           />
         )}
         {activeTab === 'clientes' && (
@@ -474,7 +482,7 @@ const App: React.FC = () => {
             currentUser={currentUser!} 
           />
         )}
-        {activeTab === 'relatorios' && <ReportsView sales={sales} users={users} products={products} />}
+        {activeTab === 'relatorios' && <ReportsView sales={sales} users={users} products={products} customers={customers} />}
         {activeTab === 'kds' && <KdsView sales={sales} onUpdateSale={async (id, data) => await db.updateSale(id, data, currentUser?.nome, currentUser?.id)} currentUser={currentUser} />}
         {activeTab === 'logs' && <LogView logs={logs} />}
         {activeTab === 'config' && (
