@@ -14,6 +14,8 @@ interface LayoutProps {
   lastSyncAt?: Date;
   onToggleTheme?: () => void;
   onOpenAI?: () => void;
+  onForceUpdate?: () => void;
+  isCheckingUpdate?: boolean;
 }
 
 const Layout: React.FC<LayoutProps> = ({ 
@@ -26,7 +28,9 @@ const Layout: React.FC<LayoutProps> = ({
   dbStatus = 'healthy',
   lastSyncAt = new Date(),
   onToggleTheme,
-  onOpenAI
+  onOpenAI,
+  onForceUpdate,
+  isCheckingUpdate = false
 }) => {
   const isAdmin = currentUser?.perfil === UserRole.ADMIN || currentUser?.usuario === 'Tusemm';
 
@@ -113,6 +117,17 @@ const Layout: React.FC<LayoutProps> = ({
               className="w-10 h-10 flex items-center justify-center rounded-xl bg-white/10 hover:bg-white/20 text-white transition-all border border-white/10 active:scale-90"
             >
               <i className={`fa-solid ${isDark ? 'fa-sun text-amber-300' : 'fa-moon text-purple-200'} text-sm`}></i>
+            </button>
+          )}
+          {onForceUpdate && (
+            <button
+              type="button"
+              onClick={onForceUpdate}
+              disabled={isCheckingUpdate}
+              title="Buscar e aplicar atualizações do sistema agora"
+              className="w-10 h-10 flex items-center justify-center rounded-xl bg-white/10 hover:bg-emerald-600/60 text-white transition-all border border-white/10 active:scale-90 disabled:opacity-50"
+            >
+              <i className={`fa-solid fa-rotate ${isCheckingUpdate ? 'animate-spin text-amber-300' : 'text-emerald-300'} text-sm`}></i>
             </button>
           )}
           <button 

@@ -59,15 +59,36 @@
 <body class="bg-gray-50 text-gray-900 font-sans antialiased overflow-x-hidden">
     <div id="root"></div>
     <script>
-      try {
-        if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.getRegistrations().then(function(registrations) {
-            for (var r of registrations) { 
-              try { r.update(); } catch(e) {} 
-            }
-          }).catch(function() {});
-        }
-      } catch (e) {}
+      // Sistema de atualização automática e desativação de cache preso
+      (function() {
+        try {
+          if ('serviceWorker' in navigator) {
+            // Se um novo service worker assumir o controle, recarrega a página automaticamente
+            var refreshing = false;
+            navigator.serviceWorker.addEventListener('controllerchange', function() {
+              if (refreshing) return;
+              refreshing = true;
+              console.log('[PWA] Nova versão detectada. Recarregando página automaticamente...');
+              window.location.reload();
+            });
+
+            // Força busca de novas versões no service worker
+            var updateAll = function() {
+              navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                for (var r of registrations) {
+                  try { r.update(); } catch(e) {}
+                }
+              }).catch(function() {});
+            };
+
+            window.addEventListener('load', updateAll);
+            window.addEventListener('focus', updateAll);
+            document.addEventListener('visibilitychange', function() {
+              if (document.visibilityState === 'visible') updateAll();
+            });
+          }
+        } catch (e) {}
+      })();
     </script>
     <script type="module" src="/index.tsx"></script>
 </body>

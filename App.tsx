@@ -15,6 +15,12 @@ import KdsView from './components/KdsView';
 import CashRegisterView from './components/CashRegisterView';
 import AIAssistantModal from './components/AIAssistantModal';
 import { safeStorage } from './utils/safeStorage';
+import { 
+  initAutoUpdateWatcher, 
+  subscribeToUpdateNotice, 
+  checkForAppUpdates, 
+  forceAppUpdate 
+} from './services/autoUpdateService';
 
 const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos (600.000 ms)
 const SESSION_USER_KEY = 'cantina_user_session';
@@ -65,6 +71,52 @@ const App: React.FC = () => {
   const [loginData, setLoginData] = useState({ user: '', pass: '' });
   const [loginError, setLoginError] = useState<string | null>(null);
   const [inactivityNotice, setInactivityNotice] = useState(false);
+  const [updateNotice, setUpdateNotice] = useState<string | null>(null);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+
+  // Monitoramento de atualizações contínuo (polled a cada 30s + ao focar/reabrir a aba)
+  useEffect(() => {
+    const stopWatcher = initAutoUpdateWatcher();
+    const unsubNotice = subscribeToUpdateNotice((hasUpdate, version) => {
+      if (hasUpdate) {
+        setUpdateNotice(`Nova versão detectada (${version || 'recente'})! Atualizando sistema...`);
+      }
+    });
+
+    return () => {
+      stopWatcher();
+      unsubNotice();
+    };
+  }, []);
+
+  const handleManualCheckUpdate = async () => {
+    setIsCheckingUpdate(true);
+    setUpdateNotice('Verificando atualizações no servidor...');
+    try {
+      const hasNew = await checkForAppUpdates(true);
+      if (!hasNew) {
+        setUpdateNotice('Você já está na versão mais recente do sistema!');
+        setTimeout(() => setUpdateNotice(null), 3000);
+      }
+    } catch (e) {
+      console.error('Erro ao buscar atualizações:', e);
+      setUpdateNotice('Não foi possível verificar atualizações no momento.');
+      setTimeout(() => setUpdateNotice(null), 3000);
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
+  const handleForceUpdate = async () => {
+    setIsCheckingUpdate(true);
+    setUpdateNotice('Limpando todos os caches e baixando última versão...');
+    try {
+      await forceAppUpdate();
+    } catch (e) {
+      console.error('Erro na atualização forçada:', e);
+      window.location.reload();
+    }
+  };
 
   // Efeito para sincronizar e aplicar tema no DOM e meta tag
   useEffect(() => {
@@ -421,6 +473,8 @@ const App: React.FC = () => {
         lastSyncAt={lastSync}
         onToggleTheme={handleToggleTheme}
         onOpenAI={() => setIsAIOpen(true)}
+        onForceUpdate={handleManualCheckUpdate}
+        isCheckingUpdate={isCheckingUpdate}
       >
         {activeTab === 'home' && <DashboardView sales={sales} products={products} setActiveTab={setActiveTab} />}
         {activeTab === 'venda' && (
@@ -498,9 +552,32 @@ const App: React.FC = () => {
             }} 
             onViewLogs={() => setActiveTab('logs')}
             onViewCustomers={() => setActiveTab('clientes')}
+            onForceUpdate={handleForceUpdate}
+            onCheckUpdate={handleManualCheckUpdate}
+            isCheckingUpdate={isCheckingUpdate}
           />
         )}
       </Layout>
+
+      {/* Notificação Flutuante de Atualização */}
+      {updateNotice && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[250] max-w-md w-[92%] bg-purple-950 text-white px-5 py-4 rounded-3xl shadow-2xl border border-purple-500/40 flex items-center gap-4 animate-in slide-in-from-top-4 duration-300 backdrop-blur-md">
+          <div className="w-10 h-10 rounded-2xl bg-purple-800/80 flex items-center justify-center shrink-0">
+            <i className={`fa-solid fa-arrows-rotate text-purple-200 text-base ${isCheckingUpdate ? 'animate-spin' : ''}`}></i>
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[10px] font-black uppercase tracking-wider text-purple-300">Atualização do Sistema</p>
+            <p className="text-xs font-bold text-white mt-0.5 leading-snug truncate">{updateNotice}</p>
+          </div>
+          <button 
+            onClick={() => setUpdateNotice(null)} 
+            className="text-purple-300 hover:text-white p-2 text-xs"
+            title="Fechar aviso"
+          >
+            <i className="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      )}
 
       <AIAssistantModal 
         isOpen={isAIOpen}

@@ -154,7 +154,44 @@ Regras:
     }
   });
 
-  // Integrar Vite como Middleware
+  // ==========================================
+  // AUTO-UPDATE & VERSION ENDPOINT
+  // ==========================================
+  const SERVER_START_TIME = new Date().toISOString();
+  const APP_VERSION = process.env.APP_VERSION || `v1.2.0-${Date.now()}`;
+
+  app.get("/api/version", (req, res) => {
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.json({
+      version: APP_VERSION,
+      serverTime: new Date().toISOString(),
+      startedAt: SERVER_START_TIME,
+      name: "Cantina TUSEMM"
+    });
+  });
+
+  // Middleware anti-cache para garantir que index.html e service workers nunca fiquem presos no cache do navegador
+  app.use((req, res, next) => {
+    const p = req.path.toLowerCase();
+    if (
+      p === "/" || 
+      p === "/index.html" || 
+      p.endsWith(".html") || 
+      p.includes("sw.js") || 
+      p.includes("registersw.js") || 
+      p.includes("manifest") || 
+      p.startsWith("/api/")
+    ) {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+    }
+    next();
+  });
+
+  // Integrar Vite como Middleware ou Servir Dist
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -163,15 +200,31 @@ Regras:
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, {
+      setHeaders: (res, filePath) => {
+        const lower = filePath.toLowerCase();
+        if (lower.endsWith(".html") || lower.includes("sw.js") || lower.includes("manifest") || lower.includes("registersw")) {
+          res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0");
+          res.setHeader("Pragma", "no-cache");
+          res.setHeader("Expires", "0");
+        } else if (lower.includes("/assets/")) {
+          // Arquivos com hash de build podem ter cache longo
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        }
+      }
+    }));
+
     // For Express 5 compatibility (wildcards must be named)
     app.get('*all', (req, res) => {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
   app.listen(Number(PORT), "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
+    console.log(`Server running on http://0.0.0.0:${PORT} (Version: ${APP_VERSION})`);
   });
 }
 

@@ -15,9 +15,24 @@ interface SettingsViewProps {
   onRemoveUser: (userId: string) => void;
   onViewLogs: () => void;
   onViewCustomers?: () => void;
+  onForceUpdate?: () => void;
+  onCheckUpdate?: () => void;
+  isCheckingUpdate?: boolean;
 }
 
-const SettingsView: React.FC<SettingsViewProps> = ({ users, currentUser, settings, onUpdateSettings, onAddUser, onRemoveUser, onViewLogs, onViewCustomers }) => {
+const SettingsView: React.FC<SettingsViewProps> = ({ 
+  users, 
+  currentUser, 
+  settings, 
+  onUpdateSettings, 
+  onAddUser, 
+  onRemoveUser, 
+  onViewLogs, 
+  onViewCustomers,
+  onForceUpdate,
+  onCheckUpdate,
+  isCheckingUpdate = false
+}) => {
   const [dbHealth, setDbHealth] = useState<any>({});
   const [appSettings, setAppSettings] = useState(settings);
   const [themeNotice, setThemeNotice] = useState<string | null>(null);
@@ -282,6 +297,49 @@ const SettingsView: React.FC<SettingsViewProps> = ({ users, currentUser, setting
           </button>
           <button onClick={onViewLogs} className="w-full bg-purple-50 text-purple-900 py-4 rounded-2xl font-black text-[10px] uppercase border border-purple-100 hover:bg-purple-100 transition-all flex items-center justify-center gap-2">
             <i className="fa-solid fa-clipboard-list"></i> Logs do Sistema
+          </button>
+        </div>
+      </div>
+
+      {/* Card de Atualizações Automáticas & Cache */}
+      <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100">
+        <div className="flex justify-between items-center mb-4">
+          <div>
+            <h3 className="text-sm font-black text-purple-900 uppercase">Atualizações do Sistema</h3>
+            <p className="text-[10px] text-gray-400 font-bold uppercase mt-0.5">Sincronização & Versões Automáticas</p>
+          </div>
+          <span className="flex items-center gap-1.5 px-3 py-1 bg-green-50 border border-green-200 text-green-700 text-[9px] font-black uppercase rounded-full">
+            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+            Auto-Sync Ativo
+          </span>
+        </div>
+
+        <div className="bg-purple-50/50 p-4 rounded-2xl border border-purple-100 text-[11px] text-purple-900 space-y-2 mb-5">
+          <p className="flex items-center gap-2 font-bold">
+            <i className="fa-solid fa-cloud-arrow-down text-purple-600"></i>
+            <span>O sistema verifica novas versões a cada <strong>30 segundos</strong> e sempre que você abre o aplicativo.</span>
+          </p>
+          <p className="text-gray-500 text-[10px]">
+            Se uma nova versão for publicada na nuvem, o aplicativo atualiza automaticamente sem necessidade de limpar manualmente o cache do celular.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <button 
+            onClick={onCheckUpdate}
+            disabled={isCheckingUpdate}
+            className="w-full bg-purple-900 hover:bg-black text-white py-4 rounded-2xl font-black text-[10px] uppercase shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            <i className={`fa-solid fa-arrows-rotate ${isCheckingUpdate ? 'animate-spin' : ''}`}></i>
+            {isCheckingUpdate ? 'Verificando Servidor...' : 'Buscar Atualizações Agora'}
+          </button>
+          <button 
+            onClick={onForceUpdate}
+            disabled={isCheckingUpdate}
+            className="w-full bg-amber-500 hover:bg-amber-600 text-purple-950 py-4 rounded-2xl font-black text-[10px] uppercase shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            <i className="fa-solid fa-broom"></i>
+            Limpar Cache & Forçar Recarga
           </button>
         </div>
       </div>
