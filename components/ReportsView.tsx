@@ -1,12 +1,17 @@
-import { Sale, PaymentMethod, User, Product, Customer } from '../types';
+import { Sale, PaymentMethod, User, Product, Customer, AppSettings } from '../types';
 import React, { useState, useMemo } from 'react';
 import { normalizePhone, formatPhone, getWhatsAppLink } from '../utils/phoneUtils';
+import { getLocalDateString, getLocalMonthString, downloadBlobFile, escapeCsvCell, formatSafeDate, formatSafeTime } from '../utils/browserUtils';
+import { getSaleWhatsAppReceiptLink, printSaleThermalReceipt } from '../utils/receiptUtils';
+import { useFeedback } from './FeedbackProvider';
 
 interface ReportsViewProps {
   sales: Sale[];
   users: User[];
   products?: Product[];
   customers?: Customer[];
+  settings?: AppSettings;
+  onUpdateSaleContact?: (saleId: string, telefone: string, cliente_nome?: string) => Promise<void>;
 }
 
 export interface DebtorClient {
@@ -29,16 +34,21 @@ const ReportsView: React.FC<ReportsViewProps> = ({
   sales, 
   users, 
   products = [], 
-  customers = [] 
+  customers = [],
+  settings,
+  onUpdateSaleContact
 }) => {
+  const { showToast } = useFeedback();
   // Aba do Relatório: 'vendas' (Vendas & Faturamento) vs 'inadimplencia' (Top 10 Dívidas & Inadimplência)
   const [activeReportTab, setActiveReportTab] = useState<'vendas' | 'inadimplencia'>('inadimplencia');
 
   // Estados do Relatório de Vendas Tradicional
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
+  const [salePhoneDraft, setSalePhoneDraft] = useState('');
+  const [isSavingSalePhone, setIsSavingSalePhone] = useState(false);
   const [viewMode, setViewMode] = useState<'daily' | 'monthly'>('daily');
-  const [filterDate, setFilterDate] = useState(new Date().toLocaleDateString('en-CA'));
-  const [filterMonth, setFilterMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [filterDate, setFilterDate] = useState(() => getLocalDateString());
+  const [filterMonth, setFilterMonth] = useState(() => getLocalMonthString());
   const [filterUser, setFilterUser] = useState<string>('todos');
   const [filterPayment, setFilterPayment] = useState<string>('todos');
 
@@ -69,9 +79,9 @@ const ReportsView: React.FC<ReportsViewProps> = ({
       if (!matchesUser || !matchesPayment) return false;
 
       if (viewMode === 'daily') {
-        return saleDateObj.toLocaleDateString('en-CA') === filterDate;
+        return getLocalDateString(saleDateObj) === filterDate;
       }
-      return saleDateObj.toISOString().slice(0, 7) === filterMonth;
+      return getLocalMonthString(saleDateObj) === filterMonth;
     });
   }, [sales, filterDate, filterMonth, viewMode, filterUser, filterPayment]);
 
@@ -87,7 +97,8 @@ const ReportsView: React.FC<ReportsViewProps> = ({
 
       if (s.itens && s.itens.length > 0) {
         s.itens.forEach(it => {
-          const unitCost = it.preco_custo || productCostMap[it.produto_id] || productCostMap[it.nome?.trim().toLowerCase()] || 0;
+          const itemNameKey = (it.nome || '').trim().toLowerCase();
+          const unitCost = it.preco_custo || productCostMap[it.produto_id] || (itemNameKey ? productCostMap[itemNameKey] : 0) || 0;
           const qty = it.quantidade || 1;
           acc.custoTotal += unitCost * qty;
         });
@@ -111,8 +122,7 @@ const ReportsView: React.FC<ReportsViewProps> = ({
       s.status === 'pendente' && 
       (
         s.forma_pagamento === PaymentMethod.FIADO ||
-        (s.tipo_pedido === 'reserva' && s.status_entrega === 'entregue') ||
-        (s.tipo_pedido !== 'reserva' && s.forma_pagamento === PaymentMethod.FIADO)
+        (s.tipo_pedido === 'reserva' && s.status_entrega === 'entregue')
       )
     );
 
@@ -201,6 +211,8 @@ const ReportsView: React.FC<ReportsViewProps> = ({
       else if (avgDays > 15) faixa = 'atencao';
       else if (avgDays >= 7) faixa = 'moderado';
 
+      const sortedDates = [...d.datas].sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+
       return {
         rank: 0, // preenchido após ordenação
         key: d.key,
@@ -211,8 +223,8 @@ const ReportsView: React.FC<ReportsViewProps> = ({
         tempoMedioDias: avgDays,
         maiorAtrasoDias: maxDays,
         menorAtrasoDias: minDays,
-        dataMaisAntiga: d.datas.sort()[0] || '',
-        dataMaisRecente: d.datas.sort()[d.datas.length - 1] || '',
+        dataMaisAntiga: sortedDates[0] || '',
+        dataMaisRecente: sortedDates[sortedDates.length - 1] || '',
         compras: d.compras,
         faixaRisco: faixa
       };
@@ -301,16 +313,19 @@ const ReportsView: React.FC<ReportsViewProps> = ({
       `${d.tempoMedioDias} dias`,
       `${d.maiorAtrasoDias} dias`,
       String(d.quantidadeCompras),
-      d.dataMaisAntiga ? new Date(d.dataMaisAntiga).toLocaleDateString('pt-BR') : 'N/A',
+      d.dataMaisAntiga ? formatSafeDate(d.dataMaisAntiga) : 'N/A',
       d.faixaRisco.toUpperCase()
     ]);
 
-    const csvContent = headers.join(';') + '\n' + rows.map(r => r.join(';')).join('\n');
-    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `Relatorio_Top_Inadimplencia_TUSEMM_${new Date().toLocaleDateString('en-CA')}.csv`;
-    link.click();
+    const csvContent =
+      headers.map(escapeCsvCell).join(';') +
+      '\n' +
+      rows.map(r => r.map(escapeCsvCell).join(';')).join('\n');
+    downloadBlobFile(
+      '\uFEFF' + csvContent,
+      `Relatorio_Top_Inadimplencia_TUSEMM_${getLocalDateString()}.csv`
+    );
+    showToast('Relatório de inadimplência exportado!', 'success');
   };
 
   // Exportar CSV de Vendas Tradicional
@@ -319,12 +334,11 @@ const ReportsView: React.FC<ReportsViewProps> = ({
     const rows: string[][] = [];
     
     filteredSales.forEach(s => {
-      const saleDate = new Date(s.created_at);
       const isFiado = s.forma_pagamento === PaymentMethod.FIADO;
       const tipoVenda = isFiado ? 'Fiado' : 'Venda Normal';
       const cliente = s.cliente_nome || 'Balcão';
-      const dataStr = saleDate.toLocaleDateString('pt-BR');
-      const horaStr = saleDate.toLocaleTimeString('pt-BR');
+      const dataStr = formatSafeDate(s.created_at);
+      const horaStr = formatSafeTime(s.created_at);
       const totalStr = (s.valor_total || 0).toFixed(2).replace('.', ',');
       let formaPagamento = s.forma_pagamento.toUpperCase();
       if (s.forma_pagamento === PaymentMethod.FIADO && s.pago_com) {
@@ -365,12 +379,15 @@ const ReportsView: React.FC<ReportsViewProps> = ({
       }
     });
 
-    const csvContent = headers.join(';') + '\n' + rows.map(r => r.join(';')).join('\n');
-    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `Relatorio_Vendas_TUSEMM_${viewMode === 'daily' ? filterDate : filterMonth}.csv`;
-    link.click();
+    const csvContent =
+      headers.map(escapeCsvCell).join(';') +
+      '\n' +
+      rows.map(r => r.map(escapeCsvCell).join(';')).join('\n');
+    downloadBlobFile(
+      '\uFEFF' + csvContent,
+      `Relatorio_Vendas_TUSEMM_${viewMode === 'daily' ? filterDate : filterMonth}.csv`
+    );
+    showToast('Relatório de vendas exportado!', 'success');
   };
 
   return (
@@ -816,30 +833,53 @@ const ReportsView: React.FC<ReportsViewProps> = ({
           </div>
 
           <div className="bg-white dark:bg-[#160e2b] rounded-[32px] shadow-sm border border-gray-100 dark:border-purple-900/40 overflow-hidden">
-            <table className="w-full text-left">
-              <thead className="bg-gray-50 dark:bg-[#20143a]/50">
-                <tr>
-                  <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase">Venda</th>
-                  <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase">Cliente</th>
-                  <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase text-right">Valor</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100 dark:divide-purple-900/20">
-                {filteredSales.map(s => (
-                  <tr key={s.id} className="hover:bg-gray-50 dark:hover:bg-purple-950/40 cursor-pointer active:scale-95 transition-all" onClick={() => setSelectedSale(s)}>
-                    <td className="px-6 py-4">
-                      <div className="text-[10px] font-black text-purple-900 dark:text-purple-300 uppercase">{s.forma_pagamento}</div>
-                      <div className="text-[8px] text-gray-400 font-bold">{new Date(s.created_at).toLocaleTimeString()}</div>
-                    </td>
-                    <td className="px-6 py-4">
-                       <div className="text-[10px] font-black text-gray-700 dark:text-gray-200 uppercase">{s.cliente_nome || 'Balcão'}</div>
-                       <div className={`text-[7px] font-black uppercase ${s.status === 'pago' ? 'text-green-500' : 'text-red-500'}`}>{s.status}</div>
-                    </td>
-                    <td className="px-6 py-4 text-right font-black text-gray-900 dark:text-white">R$ {(s.valor_total || 0).toFixed(2)}</td>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="bg-gray-50 dark:bg-[#20143a]/50">
+                  <tr>
+                    <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase">Venda</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase">Cliente</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase text-right">Valor</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-purple-900/20">
+                  {filteredSales.map(s => (
+                    <tr
+                      key={s.id}
+                      className="hover:bg-gray-50 dark:hover:bg-purple-950/40 cursor-pointer active:scale-98 transition-all"
+                      onClick={() => {
+                        setSelectedSale(s);
+                        setSalePhoneDraft(s.telefone_comprador ? formatPhone(s.telefone_comprador) : '');
+                      }}
+                    >
+                      <td className="px-6 py-4">
+                        <div className="text-[10px] font-black text-purple-900 dark:text-purple-300 uppercase">{s.forma_pagamento}</div>
+                        <div className="text-[9px] text-gray-400 font-bold">{formatSafeTime(s.created_at)}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-[10px] font-black text-gray-700 dark:text-gray-200 uppercase">{s.cliente_nome || 'Balcão'}</div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className={`text-[8px] font-black uppercase ${s.status === 'pago' ? 'text-green-500' : 'text-red-500'}`}>{s.status}</span>
+                          {s.telefone_comprador && (
+                            <span className="text-[9px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                              <i className="fa-brands fa-whatsapp"></i> {formatPhone(s.telefone_comprador)}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-right font-black text-gray-900 dark:text-white">R$ {(s.valor_total || 0).toFixed(2)}</td>
+                    </tr>
+                  ))}
+                  {filteredSales.length === 0 && (
+                    <tr>
+                      <td colSpan={3} className="text-center py-10 text-xs font-bold uppercase text-gray-400">
+                        Nenhuma venda encontrada para o período selecionado.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
@@ -940,7 +980,10 @@ const ReportsView: React.FC<ReportsViewProps> = ({
             <div className="pt-4 border-t border-gray-100 dark:border-purple-900/30 flex gap-2">
               {selectedDebtorDetail.telefone && (
                 <a
-                  href={getWhatsAppLink(selectedDebtorDetail.telefone, `Olá ${selectedDebtorDetail.nome}! Passando para lembrar da sua conta pendente na Cantina TUSEMM no valor total de R$ ${selectedDebtorDetail.totalDivida.toFixed(2)}. Chave PIX: ${products[0] ? '' : ''}. Muito obrigado! 🙏`)}
+                  href={getWhatsAppLink(
+                    selectedDebtorDetail.telefone,
+                    `Olá ${selectedDebtorDetail.nome}! Passando para lembrar da sua conta pendente na Cantina ${settings?.cantinaName || 'TUSEMM'} no valor total de R$ ${selectedDebtorDetail.totalDivida.toFixed(2)}.${settings?.pixChave ? ` Chave PIX: ${settings.pixChave}.` : ''} Muito obrigado! 🙏`
+                  )}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-3.5 rounded-2xl text-xs font-black uppercase text-center shadow-lg flex items-center justify-center gap-2"
@@ -965,14 +1008,14 @@ const ReportsView: React.FC<ReportsViewProps> = ({
       {/* ============================================================== */}
       {selectedSale && (
         <div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto" onClick={() => setSelectedSale(null)}>
-          <div className="bg-white dark:bg-[#160e2b] rounded-[40px] p-8 w-full max-w-sm shadow-2xl my-auto border border-purple-100 dark:border-purple-900/40" onClick={e => e.stopPropagation()}>
-            <h3 className="text-2xl font-black text-purple-950 dark:text-white uppercase text-center mb-2">Detalhes da Venda</h3>
-            <p className="text-center text-xs font-bold text-gray-500 dark:text-purple-300 mb-6 uppercase tracking-wider">{selectedSale.cliente_nome || 'Balcão'}</p>
+          <div className="bg-white dark:bg-[#160e2b] rounded-[40px] p-6 sm:p-8 w-full max-w-sm shadow-2xl my-auto border border-purple-100 dark:border-purple-900/40" onClick={e => e.stopPropagation()}>
+            <h3 className="text-2xl font-black text-purple-950 dark:text-white uppercase text-center mb-1">Detalhes da Venda</h3>
+            <p className="text-center text-xs font-bold text-gray-500 dark:text-purple-300 mb-5 uppercase tracking-wider">{selectedSale.cliente_nome || 'Balcão'}</p>
             
-            <div className="bg-gray-50 dark:bg-[#20143a] rounded-3xl p-4 mb-6 max-h-60 overflow-y-auto border border-gray-100 dark:border-purple-900/30">
+            <div className="bg-gray-50 dark:bg-[#20143a] rounded-3xl p-4 mb-4 max-h-52 overflow-y-auto border border-gray-100 dark:border-purple-900/30">
               <p className="text-[10px] font-black uppercase text-gray-400 mb-2 border-b border-gray-200 dark:border-purple-900/30 pb-2 flex justify-between">
-                <span>{new Date(selectedSale.created_at).toLocaleDateString()}</span>
-                <span>{new Date(selectedSale.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                <span>{formatSafeDate(selectedSale.created_at)}</span>
+                <span>{formatSafeTime(selectedSale.created_at)}</span>
               </p>
               <div className="space-y-2">
                 {selectedSale.itens?.map((item, idx) => (
@@ -984,7 +1027,7 @@ const ReportsView: React.FC<ReportsViewProps> = ({
               </div>
             </div>
 
-            <div className="bg-purple-50 dark:bg-purple-950/60 p-4 rounded-3xl flex justify-between items-center mb-6">
+            <div className="bg-purple-50 dark:bg-purple-950/60 p-4 rounded-3xl flex justify-between items-center mb-4">
               <div>
                 <p className="text-[9px] font-black text-purple-400 uppercase">Status</p>
                 <p className={`text-sm font-black uppercase ${selectedSale.status === 'pago' ? 'text-green-600' : 'text-red-500'}`}>{selectedSale.status}</p>
@@ -998,9 +1041,78 @@ const ReportsView: React.FC<ReportsViewProps> = ({
               </div>
             </div>
 
-            <div className="flex justify-between items-end border-t border-gray-100 dark:border-purple-900/30 pt-4 mb-6">
+            {/* Inserir / Editar telefone na venda concluída + WhatsApp */}
+            {onUpdateSaleContact && (
+              <div className="mb-4 p-3.5 rounded-2xl bg-gray-50 dark:bg-[#20143a] border border-gray-100 dark:border-purple-900/30 space-y-2">
+                <label className="text-[9px] font-black uppercase text-purple-900 dark:text-purple-300 tracking-wider block">
+                  Telefone / WhatsApp do Cliente
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="tel"
+                    placeholder="(11) 99999-9999"
+                    value={salePhoneDraft}
+                    onChange={e => setSalePhoneDraft(formatPhone(e.target.value))}
+                    className="flex-1 bg-white dark:bg-[#160e2b] border border-gray-200 dark:border-purple-800 rounded-xl px-3 py-2 text-xs font-bold text-gray-900 dark:text-white outline-none focus:border-purple-600"
+                  />
+                  <button
+                    type="button"
+                    disabled={isSavingSalePhone}
+                    onClick={async () => {
+                      if (!selectedSale) return;
+                      const clean = normalizePhone(salePhoneDraft);
+                      if (!clean || clean.length < 8) {
+                        showToast('Informe um telefone válido com DDD.', 'warning');
+                        return;
+                      }
+                      setIsSavingSalePhone(true);
+                      try {
+                        const formatted = formatPhone(clean) || salePhoneDraft;
+                        await onUpdateSaleContact(selectedSale.id, formatted, selectedSale.cliente_nome);
+                        setSelectedSale(prev => prev ? { ...prev, telefone_comprador: formatted } : null);
+                        showToast('Telefone salvo na venda!', 'success');
+                      } catch (err: any) {
+                        showToast('Erro ao salvar telefone: ' + (err?.message || 'Tente novamente'), 'error');
+                      } finally {
+                        setIsSavingSalePhone(false);
+                      }
+                    }}
+                    className="px-3 py-2 rounded-xl bg-purple-900 hover:bg-purple-800 text-white text-[10px] font-black uppercase disabled:opacity-50"
+                  >
+                    {isSavingSalePhone ? '...' : 'Salvar'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-between items-end border-t border-gray-100 dark:border-purple-900/30 pt-4 mb-5">
               <span className="text-[10px] font-black text-gray-400 uppercase">Total Geral</span>
               <span className="text-3xl font-black text-purple-950 dark:text-white">R$ {(Number(selectedSale.valor_total) || 0).toFixed(2)}</span>
+            </div>
+
+            <div className="flex gap-2 mb-3">
+              {settings && (
+                <button
+                  type="button"
+                  onClick={() => printSaleThermalReceipt(selectedSale, settings)}
+                  className="flex-1 py-3 rounded-2xl bg-purple-100 dark:bg-purple-950 text-purple-900 dark:text-purple-200 font-black text-[10px] uppercase flex items-center justify-center gap-1.5"
+                >
+                  <i className="fa-solid fa-print"></i> Imprimir
+                </button>
+              )}
+              {(salePhoneDraft || selectedSale.telefone_comprador) && (
+                <a
+                  href={getSaleWhatsAppReceiptLink(
+                    { ...selectedSale, telefone_comprador: salePhoneDraft || selectedSale.telefone_comprador },
+                    settings || { cantinaName: 'Cantina TUSEMM' }
+                  )}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] uppercase flex items-center justify-center gap-1.5"
+                >
+                  <i className="fa-brands fa-whatsapp"></i> WhatsApp
+                </a>
+              )}
             </div>
 
             <button 

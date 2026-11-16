@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { CashShift, CashMovement, Sale, User, PaymentMethod } from '../types';
+import { CashShift, Sale, User, PaymentMethod } from '../types';
 import { db } from '../services/firebaseService';
+import { parseLocaleNumber, formatSafeDate, formatSafeTime, formatSafeDateTime } from '../utils/browserUtils';
+import { useFeedback } from './FeedbackProvider';
 
 interface CashRegisterViewProps {
   shifts: CashShift[];
@@ -15,7 +17,8 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
   sales,
   currentUser
 }) => {
-  const [openingBalance, setOpeningBalance] = useState('100.00');
+  const { showToast, confirmAction } = useFeedback();
+  const [openingBalance, setOpeningBalance] = useState('100,00');
   const [movementModal, setMovementModal] = useState<'sangria' | 'suprimento' | null>(null);
   const [movementValue, setMovementValue] = useState('');
   const [movementReason, setMovementReason] = useState('');
@@ -58,13 +61,17 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
 
   const handleOpenShift = async () => {
     if (!currentUser) return;
-    const val = parseFloat(openingBalance);
-    if (isNaN(val) || val < 0) return alert("Informe um valor de abertura válido.");
+    const val = parseLocaleNumber(openingBalance);
+    if (!openingBalance.trim() || isNaN(val) || val < 0) {
+      showToast('Informe um valor de abertura válido.', 'warning');
+      return;
+    }
     setIsSubmitting(true);
     try {
       await db.openCashShift(val, currentUser.nome, currentUser.id);
+      showToast(`Caixa aberto com fundo inicial de R$ ${val.toFixed(2)}!`, 'success');
     } catch (e: any) {
-      alert("Erro ao abrir caixa: " + e.message);
+      showToast('Erro ao abrir caixa: ' + (e?.message || 'Tente novamente'), 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -72,13 +79,20 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
 
   const handleAddMovement = async () => {
     if (!currentShift || !currentUser || !movementModal) return;
-    const val = parseFloat(movementValue);
-    if (isNaN(val) || val <= 0) return alert("Informe um valor maior que zero.");
-    
+    const val = parseLocaleNumber(movementValue);
+    if (!movementValue.trim() || isNaN(val) || val <= 0) {
+      showToast('Informe um valor maior que zero.', 'warning');
+      return;
+    }
+
     if (movementModal === 'sangria' && val > expectedCashInDrawer) {
-      if (!confirm(`Atenção: O valor da sangria (R$ ${val.toFixed(2)}) é maior que o saldo em dinheiro disponível no caixa (R$ ${expectedCashInDrawer.toFixed(2)}). Deseja continuar?`)) {
-        return;
-      }
+      const confirmed = await confirmAction({
+        title: 'Sangria Acima do Saldo',
+        message: `O valor da sangria (R$ ${val.toFixed(2)}) é maior que o saldo em dinheiro disponível no caixa (R$ ${expectedCashInDrawer.toFixed(2)}). Deseja continuar mesmo assim?`,
+        confirmLabel: 'Confirmar Sangria',
+        destructive: true
+      });
+      if (!confirmed) return;
     }
 
     setIsSubmitting(true);
@@ -91,11 +105,15 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
         currentUser.nome,
         currentUser.id
       );
+      showToast(
+        `${movementModal === 'sangria' ? 'Sangria' : 'Suprimento'} de R$ ${val.toFixed(2)} registrado!`,
+        'success'
+      );
       setMovementModal(null);
       setMovementValue('');
       setMovementReason('');
     } catch (e: any) {
-      alert("Erro ao registrar movimentação: " + e.message);
+      showToast('Erro ao registrar movimentação: ' + (e?.message || 'Tente novamente'), 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -103,8 +121,11 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
 
   const handleConfirmCloseShift = async () => {
     if (!currentShift || !currentUser) return;
-    const counted = parseFloat(countedCash);
-    if (isNaN(counted) || counted < 0) return alert("Informe o valor físico contado no caixa.");
+    const counted = parseLocaleNumber(countedCash);
+    if (!countedCash.trim() || isNaN(counted) || counted < 0) {
+      showToast('Informe o valor físico contado no caixa.', 'warning');
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -123,11 +144,12 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
         currentUser.nome,
         currentUser.id
       );
+      showToast('Turno de caixa encerrado com sucesso!', 'success');
       setIsClosingModal(false);
       setCountedCash('');
       setClosingNotes('');
     } catch (e: any) {
-      alert("Erro ao fechar caixa: " + e.message);
+      showToast('Erro ao fechar caixa: ' + (e?.message || 'Tente novamente'), 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -177,17 +199,17 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
                 Fundo de Troco Inicial (R$)
               </label>
               <input
-                type="number"
-                step="0.01"
+                type="text"
+                inputMode="decimal"
                 value={openingBalance}
                 onChange={e => setOpeningBalance(e.target.value)}
-                placeholder="0.00"
+                placeholder="0,00"
                 className="w-full bg-gray-50 dark:bg-[#20143a] border border-gray-200 dark:border-purple-900/50 rounded-2xl px-5 py-4 font-black text-xl text-purple-950 dark:text-white outline-none focus:border-purple-600"
               />
             </div>
 
             <div className="flex gap-2">
-              {['50.00', '100.00', '150.00', '200.00'].map(val => (
+              {['50,00', '100,00', '150,00', '200,00'].map(val => (
                 <button
                   key={val}
                   type="button"
@@ -223,7 +245,7 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
                 </span>
                 <h3 className="text-4xl font-black mt-1">R$ {expectedCashInDrawer.toFixed(2)}</h3>
                 <p className="text-[11px] font-semibold mt-2 opacity-90">
-                  Aberto por <span className="font-bold underline">{currentShift.aberto_por_nome}</span> às {new Date(currentShift.aberto_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                  Aberto por <span className="font-bold underline">{currentShift.aberto_por_nome}</span> às {formatSafeTime(currentShift.aberto_em)}
                 </p>
               </div>
 
@@ -316,7 +338,7 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
                       <div>
                         <span className="font-black uppercase text-gray-900 dark:text-white block">{mov.motivo}</span>
                         <span className="text-[9px] text-gray-500 dark:text-gray-400">
-                          {new Date(mov.data).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} • {mov.operador_nome}
+                          {formatSafeTime(mov.data)} • {mov.operador_nome}
                         </span>
                       </div>
                     </div>
@@ -352,7 +374,7 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-black text-xs uppercase text-purple-950 dark:text-white">
-                        {new Date(shift.aberto_em).toLocaleDateString('pt-BR')} ({new Date(shift.aberto_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} às {shift.fechado_em ? new Date(shift.fechado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '?'})
+                        {formatSafeDate(shift.aberto_em)} ({formatSafeTime(shift.aberto_em)} às {shift.fechado_em ? formatSafeTime(shift.fechado_em) : '?'})
                       </span>
                       <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${
                         diff === 0 ? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300' : (diff > 0 ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300' : 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300')
@@ -394,9 +416,9 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
               <div>
                 <label className="text-[10px] font-black text-gray-500 uppercase ml-2 mb-1 block">Valor (R$)</label>
                 <input
-                  type="number"
-                  step="0.01"
-                  placeholder="0.00"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0,00"
                   value={movementValue}
                   onChange={e => setMovementValue(e.target.value)}
                   className="w-full bg-gray-50 dark:bg-[#22133f] border border-gray-200 dark:border-purple-900/50 rounded-2xl px-5 py-4 font-black text-xl text-purple-950 dark:text-white outline-none focus:border-purple-600"
@@ -449,43 +471,47 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
                   Total em Dinheiro Físico Contado (R$)
                 </label>
                 <input
-                  type="number"
-                  step="0.01"
-                  placeholder="0.00"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0,00"
                   value={countedCash}
                   onChange={e => setCountedCash(e.target.value)}
                   className="w-full bg-gray-50 dark:bg-[#22133f] border border-gray-200 dark:border-purple-900/50 rounded-2xl px-5 py-4 font-black text-2xl text-purple-950 dark:text-white outline-none focus:border-purple-600"
                 />
               </div>
 
-              {countedCash && !isNaN(parseFloat(countedCash)) && (
-                <div className={`p-4 rounded-2xl border text-xs font-bold ${
-                  (parseFloat(countedCash) - expectedCashInDrawer) === 0
-                    ? 'bg-green-50 border-green-200 text-green-800 dark:bg-green-950/60 dark:border-green-800 dark:text-green-300'
-                    : ((parseFloat(countedCash) - expectedCashInDrawer) > 0
-                      ? 'bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-950/60 dark:border-blue-800 dark:text-blue-300'
-                      : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-950/60 dark:border-red-800 dark:text-red-300')
-                }`}>
-                  <div className="flex justify-between items-center mb-1">
-                    <span>Esperado pelo Sistema:</span>
-                    <span>R$ {expectedCashInDrawer.toFixed(2)}</span>
+              {countedCash.trim() && (() => {
+                const parsedCounted = parseLocaleNumber(countedCash);
+                const diff = parsedCounted - expectedCashInDrawer;
+                return (
+                  <div className={`p-4 rounded-2xl border text-xs font-bold ${
+                    diff === 0
+                      ? 'bg-green-50 border-green-200 text-green-800 dark:bg-green-950/60 dark:border-green-800 dark:text-green-300'
+                      : (diff > 0
+                        ? 'bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-950/60 dark:border-blue-800 dark:text-blue-300'
+                        : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-950/60 dark:border-red-800 dark:text-red-300')
+                  }`}>
+                    <div className="flex justify-between items-center mb-1">
+                      <span>Esperado pelo Sistema:</span>
+                      <span>R$ {expectedCashInDrawer.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between items-center mb-1">
+                      <span>Informado por Você:</span>
+                      <span>R$ {parsedCounted.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between items-center pt-2 border-t font-black uppercase text-sm">
+                      <span>Resultado da Conferência:</span>
+                      <span>
+                        {diff === 0
+                          ? '✅ Perfeito (Zero diferença)'
+                          : (diff > 0
+                            ? `🟢 Sobra de R$ ${diff.toFixed(2)}`
+                            : `🔴 Falta de R$ ${Math.abs(diff).toFixed(2)}`)}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex justify-between items-center mb-1">
-                    <span>Informado por Você:</span>
-                    <span>R$ {parseFloat(countedCash).toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between items-center pt-2 border-t font-black uppercase text-sm">
-                    <span>Resultado da Conferência:</span>
-                    <span>
-                      {(parseFloat(countedCash) - expectedCashInDrawer) === 0
-                        ? '✅ Perfeito (Zero diferença)'
-                        : ((parseFloat(countedCash) - expectedCashInDrawer) > 0
-                          ? `🟢 Sobra de R$ ${(parseFloat(countedCash) - expectedCashInDrawer).toFixed(2)}`
-                          : `🔴 Falta de R$ ${Math.abs(parseFloat(countedCash) - expectedCashInDrawer).toFixed(2)}`)}
-                    </span>
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
               <div>
                 <label className="text-[10px] font-black text-gray-500 uppercase ml-2 mb-1 block">Observações do Fechamento</label>
@@ -531,8 +557,8 @@ export const CashRegisterView: React.FC<CashRegisterViewProps> = ({
 
             <div className="space-y-3 text-xs">
               <div className="p-3 bg-gray-50 dark:bg-[#22133f] rounded-2xl">
-                <p className="font-bold">Abertura: {new Date(selectedShiftHistory.aberto_em).toLocaleString('pt-BR')}</p>
-                <p className="font-bold">Fechamento: {selectedShiftHistory.fechado_em ? new Date(selectedShiftHistory.fechado_em).toLocaleString('pt-BR') : '-'}</p>
+                <p className="font-bold">Abertura: {formatSafeDateTime(selectedShiftHistory.aberto_em)}</p>
+                <p className="font-bold">Fechamento: {selectedShiftHistory.fechado_em ? formatSafeDateTime(selectedShiftHistory.fechado_em) : '-'}</p>
                 <p className="text-gray-500">Operador: {selectedShiftHistory.fechado_por_nome || selectedShiftHistory.aberto_por_nome}</p>
               </div>
 

@@ -3,6 +3,7 @@
  * Garante que o aplicativo web / PWA busque atualizações automaticamente
  * sem que o usuário fique preso em versões antigas em cache.
  */
+import { safeStorage } from '../utils/safeStorage';
 
 const LOCAL_STORAGE_VERSION_KEY = 'cantina_app_version';
 
@@ -16,34 +17,27 @@ export interface VersionInfo {
 type UpdateCallback = (hasUpdate: boolean, newVersion?: string) => void;
 const listeners: Set<UpdateCallback> = new Set();
 
-let currentKnownVersion: string | null = null;
+let currentKnownVersion: string | null = safeStorage.getItem(LOCAL_STORAGE_VERSION_KEY);
 let checkIntervalTimer: any = null;
 let isUpdating = false;
-
-// Inicializa a versão salva
-try {
-  currentKnownVersion = localStorage.getItem(LOCAL_STORAGE_VERSION_KEY);
-} catch (e) {}
 
 /**
  * Consulta o servidor para verificar a versão atual da aplicação
  */
 export async function fetchServerVersion(): Promise<VersionInfo | null> {
   try {
-    // Adiciona timestamp para furar qualquer cache de proxy, navegador ou CDN
     const res = await fetch(`/api/version?_nocache=${Date.now()}`, {
       cache: 'no-store',
       headers: {
         'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache'
+        Pragma: 'no-cache'
       }
     });
 
     if (!res.ok) return null;
     const data = await res.json();
     return data as VersionInfo;
-  } catch (err) {
-    // Falha silenciosa em caso de offline
+  } catch {
     return null;
   }
 }
@@ -55,8 +49,7 @@ export async function clearAllAppCaches(): Promise<void> {
   try {
     if ('caches' in window) {
       const keys = await caches.keys();
-      await Promise.all(keys.map(key => caches.delete(key)));
-      console.log('[AutoUpdate] CacheStorage limpo com sucesso.');
+      await Promise.all(keys.map((key) => caches.delete(key)));
     }
   } catch (e) {
     console.warn('[AutoUpdate] Erro ao limpar caches:', e);
@@ -69,11 +62,11 @@ export async function clearAllAppCaches(): Promise<void> {
         await reg.update().catch(() => {});
       }
     }
-  } catch (e) {}
+  } catch {}
 }
 
 /**
- * Força a atualização imediata da aplicação com recarregamento da página
+ * Força a atualização imediata preservando rota, query params (ex: ?view=reserva) e hash
  */
 export async function forceAppUpdate(): Promise<void> {
   if (isUpdating) return;
@@ -82,15 +75,19 @@ export async function forceAppUpdate(): Promise<void> {
   try {
     const serverInfo = await fetchServerVersion();
     if (serverInfo?.version) {
-      localStorage.setItem(LOCAL_STORAGE_VERSION_KEY, serverInfo.version);
+      safeStorage.setItem(LOCAL_STORAGE_VERSION_KEY, serverInfo.version);
     }
-  } catch (e) {}
+  } catch {}
 
   await clearAllAppCaches();
 
-  // Força recarregamento furando o cache
-  const cleanUrl = window.location.origin + window.location.pathname;
-  window.location.href = `${cleanUrl}?v=${Date.now()}`;
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('_v', String(Date.now()));
+    window.location.replace(url.toString());
+  } catch {
+    window.location.reload();
+  }
 }
 
 /**
@@ -102,29 +99,23 @@ export async function checkForAppUpdates(autoReload: boolean = true): Promise<bo
 
   const serverVer = serverInfo.version;
 
-  // Primeira vez abrindo a aplicação
   if (!currentKnownVersion) {
     currentKnownVersion = serverVer;
-    try {
-      localStorage.setItem(LOCAL_STORAGE_VERSION_KEY, serverVer);
-    } catch (e) {}
+    safeStorage.setItem(LOCAL_STORAGE_VERSION_KEY, serverVer);
     return false;
   }
 
-  // Detectou versão mais recente!
   if (currentKnownVersion !== serverVer) {
     console.log(`[AutoUpdate] Nova versão detectada: ${serverVer} (atual: ${currentKnownVersion})`);
-    
-    listeners.forEach(cb => {
-      try { cb(true, serverVer); } catch (e) {}
+
+    listeners.forEach((cb) => {
+      try {
+        cb(true, serverVer);
+      } catch {}
     });
 
     if (autoReload) {
-      try {
-        localStorage.setItem(LOCAL_STORAGE_VERSION_KEY, serverVer);
-      } catch (e) {}
-      
-      // Pequeno delay para exibir notificação visual na tela
+      safeStorage.setItem(LOCAL_STORAGE_VERSION_KEY, serverVer);
       setTimeout(async () => {
         await forceAppUpdate();
       }, 1200);
@@ -140,17 +131,14 @@ export async function checkForAppUpdates(autoReload: boolean = true): Promise<bo
  * Inicia o monitoramento contínuo de atualizações do sistema
  */
 export function initAutoUpdateWatcher(): () => void {
-  // 1. Checagem inicial na inicialização
   checkForAppUpdates(false).catch(() => {});
 
-  // 2. Checagem periódica a cada 30 segundos
   if (!checkIntervalTimer) {
     checkIntervalTimer = setInterval(() => {
       checkForAppUpdates(true).catch(() => {});
     }, 30000);
   }
 
-  // 3. Checagem imediata quando o usuário volta para a aba ou desbloqueia o celular
   const handleVisibilityOrFocus = () => {
     if (document.visibilityState === 'visible') {
       checkForAppUpdates(true).catch(() => {});
@@ -160,12 +148,16 @@ export function initAutoUpdateWatcher(): () => void {
   window.addEventListener('focus', handleVisibilityOrFocus);
   document.addEventListener('visibilitychange', handleVisibilityOrFocus);
 
-  // 4. Se o Service Worker mudar de versão ativa, recarrega automaticamente
+  const handleControllerChange = () => {
+    const w = window as any;
+    if (w.__tusemmReloading) return;
+    w.__tusemmReloading = true;
+    console.log('[AutoUpdate] Service Worker assumiu o controle. Recarregando...');
+    window.location.reload();
+  };
+
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      console.log('[AutoUpdate] Service Worker assumiu o controle. Recarregando...');
-      window.location.reload();
-    });
+    navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
   }
 
   return () => {
@@ -175,6 +167,9 @@ export function initAutoUpdateWatcher(): () => void {
     }
     window.removeEventListener('focus', handleVisibilityOrFocus);
     document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange);
+    }
   };
 }
 

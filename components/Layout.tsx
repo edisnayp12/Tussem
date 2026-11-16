@@ -50,7 +50,7 @@ const Layout: React.FC<LayoutProps> = ({
     if (currentUser?.perfil === UserRole.KDS) {
       return item.id === 'kds';
     }
-    return item.minRole === UserRole.COMMON || (item.minRole === UserRole.KDS && currentUser?.perfil === UserRole.KDS);
+    return item.minRole === UserRole.COMMON;
   });
 
   const cantinaInitial = (settings.cantinaName || 'C')[0].toUpperCase();

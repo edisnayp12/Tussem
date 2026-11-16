@@ -82,7 +82,7 @@ async function startServer() {
       }
 
       const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({});
+      const ai = new GoogleGenAI({ apiKey });
 
       const systemPrompt = `Você é o Assistente Estratégico de Inteligência Artificial da 'Cantina TUSEMM - Maria Mulambo'.
 Você atua como um co-piloto financeiro e operacional para o administrador e equipe da cantina.
@@ -100,16 +100,22 @@ Instruções de resposta:
 - Forneça recomendações acionáveis para aumentar as vendas, reduzir fiados e evitar falta de estoque.
 - Responda em no máximo 3 a 4 parágrafos objetivos.`;
 
-      const aiResponse = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: query,
-        config: {
-          systemInstruction: systemPrompt,
-          temperature: 0.6
-        }
-      });
-
-      res.json({ answer: aiResponse.text || "Sem resposta gerada." });
+      try {
+        const aiResponse = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: query,
+          config: {
+            systemInstruction: systemPrompt,
+            temperature: 0.6
+          }
+        });
+        res.json({ answer: aiResponse.text || "Sem resposta gerada." });
+      } catch (aiErr: any) {
+        console.error("Erro na chamada Gemini /api/ai/ask:", aiErr);
+        res.json({
+          answer: `[Diagnóstico TUSEMM Cloud] Faturamento hoje: R$ ${(Number(context?.totalFaturamento) || 0).toFixed(2)} (${context?.salesCount || 0} venda(s)). Fiados em aberto: ${context?.fiadosCount || 0} registro(s) somando R$ ${(Number(context?.totalFiados) || 0).toFixed(2)}. ${context?.lowStockCount > 0 ? `Atenção: ${context?.lowStockCount} produto(s) com estoque baixo.` : 'Estoque em níveis normais.'}`
+        });
+      }
     } catch (error: any) {
       console.error("Erro na IA:", error);
       res.status(500).json({ error: error.message || "Erro ao consultar IA." });
@@ -119,15 +125,15 @@ Instruções de resposta:
   app.post("/api/ai/draft-message", async (req, res) => {
     try {
       const { type, clientName, debtAmount, daysOverdue, items, pixKey } = req.body;
+      const fallbackText = `Olá, ${clientName || 'Cliente'}! Passando para lembrar do seu consumo na Cantina TUSEMM no valor de R$ ${(Number(debtAmount) || 0).toFixed(2)}. Chave PIX: ${pixKey || 'Consulte o caixa'}. Agradecemos e que Maria Mulambo abençoe! 🙏`;
 
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) {
-        const text = `Olá, ${clientName}! Passando para lembrar do seu consumo na Cantina TUSEMM no valor de R$ ${(Number(debtAmount) || 0).toFixed(2)}. Chave PIX: ${pixKey || 'Consulte o caixa'}. Agradecemos e que Maria Mulambo abençoe! 🙏`;
-        return res.json({ message: text });
+        return res.json({ message: fallbackText });
       }
 
       const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({});
+      const ai = new GoogleGenAI({ apiKey });
 
       const prompt = `Crie uma mensagem curta e simpática para WhatsApp para o cliente da Cantina TUSEMM.
 Tipo de mensagem: ${type || 'cobranca_amigavel'}
@@ -142,12 +148,16 @@ Regras:
 - Tom respeitoso, amigável e caloroso com axé.
 - Inclua a chave PIX de forma clara.`;
 
-      const aiResponse = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt
-      });
-
-      res.json({ message: aiResponse.text?.trim() || "" });
+      try {
+        const aiResponse = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt
+        });
+        res.json({ message: aiResponse.text?.trim() || fallbackText });
+      } catch (aiErr: any) {
+        console.error("Erro na chamada Gemini /api/ai/draft-message:", aiErr);
+        res.json({ message: fallbackText });
+      }
     } catch (error: any) {
       console.error("Erro ao gerar mensagem de IA:", error);
       res.status(500).json({ error: error.message });

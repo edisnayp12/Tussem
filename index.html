@@ -2,11 +2,11 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#4c1d95">
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Cantina TUSEMM" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
@@ -18,35 +18,23 @@
       // Global error listener to prevent cross-origin script error bubbling
       window.addEventListener('error', function(e) {
         if (!e.error && (!e.message || e.message === 'Script error.')) {
-          console.warn('Suppressed external script error');
           if (e.preventDefault) e.preventDefault();
           return true;
         }
       }, true);
 
-      // Pre-configure tailwind safely before or after script loads
-      window.tailwind = window.tailwind || {};
-      window.tailwind.config = {
-        darkMode: 'class',
-        theme: {
-          extend: {
-            colors: {
-              tusemm: {
-                dark: '#0d081a',
-                card: '#170f2b',
-                surface: '#20143a',
-                border: '#35215c',
-                accent: '#9333ea',
-                gold: '#fbbf24'
-              }
-            }
-          }
-        }
-      };
+      // Shared reload guard to avoid double reloads across Service Worker listeners
+      window.__tusemmReloading = false;
 
-      // Prevent theme flashing on page reload
+      // Prevent theme flashing on page reload (compatible with Safari Private Mode / restricted storage)
       try {
-        var savedTheme = (typeof window !== 'undefined' && window.localStorage) ? window.localStorage.getItem('cantina_theme') : null;
+        var savedTheme = null;
+        try {
+          savedTheme = window.localStorage ? window.localStorage.getItem('cantina_theme') : null;
+        } catch (err) {}
+        if (!savedTheme && window.name && window.name.indexOf('cantina_theme=dark') !== -1) {
+          savedTheme = 'dark';
+        }
         if (savedTheme === 'dark') {
           document.documentElement.classList.add('dark');
         } else {
@@ -54,7 +42,7 @@
         }
       } catch (e) {}
     </script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
 </head>
 <body class="bg-gray-50 text-gray-900 font-sans antialiased overflow-x-hidden">
     <div id="root"></div>
@@ -63,20 +51,17 @@
       (function() {
         try {
           if ('serviceWorker' in navigator) {
-            // Se um novo service worker assumir o controle, recarrega a página automaticamente
-            var refreshing = false;
             navigator.serviceWorker.addEventListener('controllerchange', function() {
-              if (refreshing) return;
-              refreshing = true;
+              if (window.__tusemmReloading) return;
+              window.__tusemmReloading = true;
               console.log('[PWA] Nova versão detectada. Recarregando página automaticamente...');
               window.location.reload();
             });
 
-            // Força busca de novas versões no service worker
             var updateAll = function() {
               navigator.serviceWorker.getRegistrations().then(function(registrations) {
-                for (var r of registrations) {
-                  try { r.update(); } catch(e) {}
+                for (var i = 0; i < registrations.length; i++) {
+                  try { registrations[i].update(); } catch(e) {}
                 }
               }).catch(function() {});
             };

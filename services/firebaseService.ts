@@ -1,93 +1,124 @@
 import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, signInAnonymously, onAuthStateChanged, 
-  signInWithEmailAndPassword, signOut 
+import {
+  getAuth,
+  signInAnonymously,
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut
 } from 'firebase/auth';
-import { 
-  getFirestore, collection, doc, query, where, orderBy, 
-  onSnapshot, getDocs, getDoc, setDoc, updateDoc, deleteDoc, 
-  addDoc, serverTimestamp, writeBatch, initializeFirestore,
-  persistentLocalCache, persistentMultipleTabManager,
-  increment, limit
+import {
+  getFirestore,
+  collection,
+  doc,
+  query,
+  where,
+  orderBy,
+  onSnapshot,
+  getDocs,
+  getDoc,
+  getDocFromServer,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  writeBatch,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  memoryLocalCache,
+  increment,
+  limit
 } from 'firebase/firestore';
 
 import firebaseConfig from '../firebase-applet-config.json';
-import { Product, Sale, PaymentMethod, SaleItem, User, UserRole, AppSettings, Customer, CashShift, CashMovement } from '../types';
+import { Product, Sale, PaymentMethod, SaleItem, User, AppSettings, Customer, CashShift, CashMovement } from '../types';
 import { normalizePhone, formatPhone } from '../utils/phoneUtils';
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 
-// Inicialização com proteção para evitar erros caso já esteja inicializado ou com restrição de IndexedDB
+const targetDbId = (firebaseConfig as any).firestoreDatabaseId || '(default)';
+
+// Inicialização com fallback seguro para Safari Privado, Firefox Estrito e Iframes sem IndexedDB
 let dbInstance: any;
 try {
-  dbInstance = initializeFirestore(app, {
-    localCache: persistentLocalCache({}),
-    ignoreUndefinedProperties: true
-  }, firebaseConfig.firestoreDatabaseId || '(default)');
+  dbInstance = initializeFirestore(
+    app,
+    {
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+      ignoreUndefinedProperties: true
+    },
+    targetDbId
+  );
 } catch (e) {
   try {
-    dbInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId || '(default)');
+    dbInstance = initializeFirestore(
+      app,
+      {
+        localCache: memoryLocalCache(),
+        ignoreUndefinedProperties: true
+      },
+      targetDbId
+    );
   } catch (err) {
-    dbInstance = getFirestore(app);
+    try {
+      dbInstance = getFirestore(app, targetDbId);
+    } catch {
+      dbInstance = getFirestore(app);
+    }
   }
 }
 
 export { dbInstance };
 
-// Helper para timeout em operações do Firebase
-const withTimeout = async (promise: Promise<any>, timeoutMs: number = 10000) => {
-  let timeoutHandle: any;
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutHandle = setTimeout(() => reject(new Error("O banco de dados não respondeu a tempo (Timeout).")), timeoutMs);
-  });
-  
+// Teste inicial de conectividade com o servidor Firestore
+async function testConnection() {
   try {
-    const result = await Promise.race([promise, timeoutPromise]);
-    clearTimeout(timeoutHandle);
-    return result;
+    await getDocFromServer(doc(dbInstance, 'settings', 'global'));
   } catch (error) {
-    clearTimeout(timeoutHandle);
-    throw error;
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn('[Firebase] Modo offline detectado durante verificação inicial.');
+    }
   }
-};
+}
+testConnection();
 
 let authReadyPromise: Promise<void> | null = null;
-const ensureAuthReady = () => {
+const ensureAuthReady = (): Promise<void> => {
+  if (auth.currentUser) return Promise.resolve();
   if (authReadyPromise) return authReadyPromise;
-  
-  authReadyPromise = new Promise((resolve, reject) => {
+
+  authReadyPromise = new Promise((resolve) => {
     let resolved = false;
-    const timeout = setTimeout(() => {
+    const finish = () => {
       if (!resolved) {
-        console.warn("Auth check timed out, resolving anyway to allow app flow.");
         resolved = true;
         resolve();
       }
-    }, 15000);
+    };
+
+    const timeout = setTimeout(() => {
+      console.warn('Auth check timed out, resolving anyway to allow app flow.');
+      finish();
+    }, 12000);
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        console.log("Auth State Changed: Logged In as ", user.isAnonymous ? "Anonymous" : user.email);
-        resolved = true;
         clearTimeout(timeout);
         unsubscribe();
-        resolve();
+        finish();
       } else {
-        console.log("Auth State Changed: No User. Attempting Anonymous Login...");
         try {
           await signInAnonymously(auth);
         } catch (error: any) {
-          console.warn("Aviso de autenticação anônima (prosseguindo para login):", error.message);
-          resolved = true;
+          console.warn('Aviso de autenticação anônima:', error?.message);
           clearTimeout(timeout);
           unsubscribe();
-          resolve();
+          finish();
         }
       }
     });
   });
-  
+
   return authReadyPromise;
 };
 
@@ -95,70 +126,96 @@ ensureAuthReady();
 
 export const db = {
   ensureAuthReady,
+
   subscribeToProducts: (onUpdate: (products: Product[]) => void, onError?: (err: any) => void) => {
     const q = query(collection(dbInstance, 'products'), orderBy('nome'));
-    return onSnapshot(q, (snapshot) => {
-      const products = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Product));
-      onUpdate(products);
-    }, (error) => {
-      console.error("Erro ao ouvir produtos:", error);
-      onError && onError(error);
-    });
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Product));
+        onUpdate(products);
+      },
+      (error) => {
+        console.error('Erro ao ouvir produtos:', error);
+        onError && onError(error);
+      }
+    );
   },
 
   subscribeToSales: (onUpdate: (sales: Sale[]) => void, onError?: (err: any) => void) => {
     const q = query(collection(dbInstance, 'sales'), orderBy('created_at', 'desc'));
-    return onSnapshot(q, (snapshot) => {
-      const sales = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sale));
-      onUpdate(sales);
-    }, (error) => {
-      console.error("Erro ao ouvir vendas:", error);
-      onError && onError(error);
-    });
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const sales = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Sale));
+        onUpdate(sales);
+      },
+      (error) => {
+        console.error('Erro ao ouvir vendas:', error);
+        onError && onError(error);
+      }
+    );
   },
 
   subscribeToUsers: (onUpdate: (users: User[]) => void, onError?: (err: any) => void) => {
     const q = query(collection(dbInstance, 'users'), orderBy('nome'));
-    return onSnapshot(q, (snapshot) => {
-      const users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
-      onUpdate(users);
-    }, (error) => {
-      console.error("Erro ao ouvir usuários:", error);
-      onError && onError(error);
-    });
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const users = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as User));
+        onUpdate(users);
+      },
+      (error) => {
+        console.error('Erro ao ouvir usuários:', error);
+        onError && onError(error);
+      }
+    );
   },
 
   subscribeToCustomers: (onUpdate: (customers: Customer[]) => void, onError?: (err: any) => void) => {
     const q = query(collection(dbInstance, 'customers'), orderBy('nome'));
-    return onSnapshot(q, (snapshot) => {
-      const customers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Customer));
-      onUpdate(customers);
-    }, (error) => {
-      console.error("Erro ao ouvir clientes:", error);
-      onError && onError(error);
-    });
-  },
-  
-  subscribeToSettings: (onUpdate: (settings: AppSettings) => void, onError?: (err: any) => void) => {
-    return onSnapshot(doc(dbInstance, 'settings', 'global'), (docSnap) => {
-      if (docSnap.exists()) {
-        onUpdate(docSnap.data() as AppSettings);
-      } else {
-        onUpdate({ cantinaName: 'TUSEMM - Maria Mulambo' });
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const customers = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Customer));
+        onUpdate(customers);
+      },
+      (error) => {
+        console.error('Erro ao ouvir clientes:', error);
+        onError && onError(error);
       }
-    }, (error) => {
-      console.error("Erro ao ouvir configurações:", error);
-      onError && onError(error);
-    });
+    );
   },
 
-  async saveOrUpdateCustomer(data: { nome: string; telefone: string; valorAdicional?: number; origem?: 'reserva' | 'pdv' | 'fiado' | 'manual' }, operatorName?: string, operatorId?: string): Promise<Customer | null> {
+  subscribeToSettings: (onUpdate: (settings: AppSettings) => void, onError?: (err: any) => void) => {
+    return onSnapshot(
+      doc(dbInstance, 'settings', 'global'),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          onUpdate(docSnap.data() as AppSettings);
+        } else {
+          onUpdate({ cantinaName: 'TUSEMM - Maria Mulambo' });
+        }
+      },
+      (error) => {
+        console.error('Erro ao ouvir configurações:', error);
+        onError && onError(error);
+      }
+    );
+  },
+
+  async saveOrUpdateCustomer(
+    data: { id?: string; nome: string; telefone: string; valorAdicional?: number; origem?: 'reserva' | 'pdv' | 'fiado' | 'manual' },
+    operatorName?: string,
+    operatorId?: string
+  ): Promise<Customer | null> {
+    await ensureAuthReady();
     const cleanPhone = normalizePhone(data.telefone);
     const cleanName = (data.nome || '').trim();
     if (!cleanPhone && !cleanName) return null;
 
     // Se tiver telefone, o ID é o telefone normalizado garantindo unicidade e agrupamento
-    const docId = cleanPhone || cleanName.toLowerCase().replace(/\s+/g, '_');
+    const docId = cleanPhone || data.id || cleanName.toLowerCase().replace(/\s+/g, '_');
     const custRef = doc(dbInstance, 'customers', docId);
 
     try {
@@ -188,20 +245,29 @@ export const db = {
           nome: cleanName || 'Cliente',
           telefone: formatted || '',
           telefone_limpo: cleanPhone || '',
-          total_pedidos: (data.valorAdicional && data.valorAdicional > 0) ? 1 : 0,
+          total_pedidos: data.valorAdicional && data.valorAdicional > 0 ? 1 : 0,
           total_gasto: data.valorAdicional || 0,
           created_at: nowIso,
           updated_at: nowIso,
           origem: data.origem || 'reserva'
         };
         await setDoc(custRef, newCustomer);
+        // Se mudou de ID sem telefone para ID com telefone, remove registro antigo se existir
+        if (data.id && data.id !== docId) {
+          deleteDoc(doc(dbInstance, 'customers', data.id)).catch(() => {});
+        }
         if (operatorName && operatorId) {
-          this.logAction(operatorName, operatorId, 'Novo Cliente Cadastrado', `Cliente ${newCustomer.nome} (${newCustomer.telefone}) cadastrado no sistema.`).catch(() => {});
+          this.logAction(
+            operatorName,
+            operatorId,
+            'Novo Cliente Cadastrado',
+            `Cliente ${newCustomer.nome} (${newCustomer.telefone || 'Sem telefone'}) cadastrado no sistema.`
+          ).catch(() => {});
         }
         return newCustomer;
       }
     } catch (err) {
-      console.error("Erro ao salvar/atualizar cliente:", err);
+      console.error('Erro ao salvar/atualizar cliente:', err);
       return null;
     }
   },
@@ -217,7 +283,6 @@ export const db = {
         return { id: snap.id, ...snap.data() } as Customer;
       }
 
-      // Se não encontrou por ID direto, busca na coleção por telefone_limpo
       const q = query(collection(dbInstance, 'customers'), where('telefone_limpo', '==', cleanPhone));
       const querySnap = await getDocs(q);
       if (!querySnap.empty) {
@@ -225,7 +290,6 @@ export const db = {
         return { id: firstDoc.id, ...firstDoc.data() } as Customer;
       }
 
-      // Busca por sufixo de 8 ou 9 dígitos caso DDD tenha sido omitido
       const allCustomers = await getDocs(collection(dbInstance, 'customers'));
       for (const d of allCustomers.docs) {
         const c = d.data() as Customer;
@@ -235,12 +299,13 @@ export const db = {
         }
       }
     } catch (err) {
-      console.warn("Erro ao buscar cliente por telefone:", err);
+      console.warn('Erro ao buscar cliente por telefone:', err);
     }
     return null;
   },
 
   async deleteCustomer(customerId: string, customerName?: string, operatorName?: string, operatorId?: string) {
+    await ensureAuthReady();
     await deleteDoc(doc(dbInstance, 'customers', customerId));
     if (operatorName && operatorId) {
       await this.logAction(operatorName, operatorId, 'Exclusão de Cliente', `Cliente Removido: ${customerName || customerId}`);
@@ -248,50 +313,61 @@ export const db = {
   },
 
   async saveProduct(product: Partial<Product>, operatorName?: string, operatorId?: string) {
+    await ensureAuthReady();
     try {
       const prodRef = product.id ? doc(dbInstance, 'products', product.id) : doc(collection(dbInstance, 'products'));
-      const payload = { ...product, id: prodRef.id };
+      const payload: any = { ...product, id: prodRef.id };
       if (!product.id) {
-         payload.created_at = new Date().toISOString();
-         if(payload.ativo === undefined) payload.ativo = true;
+        payload.created_at = new Date().toISOString();
+        if (payload.ativo === undefined) payload.ativo = true;
       }
       await setDoc(prodRef, payload, { merge: true });
-      
+
       const opName = operatorName || 'Operador';
       const opId = operatorId || '0';
       const isEdit = !!product.id;
       const precoVenda = (Number(product.preco) || 0).toFixed(2);
       const precoCusto = product.preco_custo !== undefined ? ` | Custo: R$ ${(Number(product.preco_custo) || 0).toFixed(2)}` : '';
       const acao = isEdit ? 'Edição de Produto' : 'Novo Produto';
-      const detalhes = isEdit 
+      const detalhes = isEdit
         ? `Produto "${product.nome || 'Sem Nome'}" atualizado (Venda: R$ ${precoVenda}${precoCusto} | Estoque: ${product.estoque ?? 0})`
         : `Produto "${product.nome || 'Sem Nome'}" cadastrado (Venda: R$ ${precoVenda}${precoCusto} | Estoque inicial: ${product.estoque ?? 0})`;
 
-      this.logAction(opName, opId, acao, detalhes).catch(err => console.error("Log silenciado:", err));
+      this.logAction(opName, opId, acao, detalhes).catch((err) => console.error('Log silenciado:', err));
     } catch (e: any) {
-      console.error("Firestore Save Error:", e);
-      throw new Error(e.message || "Erro de permissão ou conexão.");
+      console.error('Firestore Save Error:', e);
+      throw new Error(e.message || 'Erro de permissão ou conexão.');
     }
   },
 
   async deleteProduct(productId: string, productName: string, operatorName: string, operatorId: string) {
+    await ensureAuthReady();
     await deleteDoc(doc(dbInstance, 'products', productId));
-    await this.logAction(operatorName || 'Operador', operatorId || '0', 'Exclusão de Produto', `Produto excluído do estoque: ${productName || productId}`);
+    await this.logAction(
+      operatorName || 'Operador',
+      operatorId || '0',
+      'Exclusão de Produto',
+      `Produto excluído do estoque: ${productName || productId}`
+    );
   },
 
-  async createSale(sale: any, items: SaleItem[], operatorId: string | null, operatorName?: string) {
+  async createSale(sale: any, items: SaleItem[], operatorId: string | null, operatorName?: string): Promise<Sale> {
+    await ensureAuthReady();
     const batch = writeBatch(dbInstance);
 
     const saleRef = doc(collection(dbInstance, 'sales'));
     const newSale: any = {
       id: saleRef.id,
-      usuario_id: (operatorId && operatorId !== '0') ? operatorId : null,
+      usuario_id: operatorId && operatorId !== '0' ? operatorId : null,
       forma_pagamento: sale.paymentMethod,
       valor_total: Number(sale.total) || 0,
-      status: (sale.paymentMethod === PaymentMethod.FIADO || sale.tipo_pedido === 'reserva') ? 'pendente' : 'pago',
-      cliente_nome: (sale.customerName && typeof sale.customerName === 'string' && sale.customerName.trim()) ? sale.customerName.trim() : 'Balcão',
+      status: sale.paymentMethod === PaymentMethod.FIADO || sale.tipo_pedido === 'reserva' ? 'pendente' : 'pago',
+      cliente_nome:
+        sale.customerName && typeof sale.customerName === 'string' && sale.customerName.trim()
+          ? sale.customerName.trim()
+          : 'Balcão',
       created_at: new Date().toISOString(),
-      itens: items.map(i => ({
+      itens: items.map((i) => ({
         id: doc(collection(dbInstance, 'sales')).id,
         produto_id: i.produto_id,
         nome: i.nome || '',
@@ -314,28 +390,29 @@ export const db = {
 
     batch.set(saleRef, newSale);
 
-    // Usa increment() para diminuir estoque mesmo offline, sem precisar ler dados antes
-    for(const item of items) {
-      if(item.produto_id) {
+    for (const item of items) {
+      if (item.produto_id) {
         const pRef = doc(dbInstance, 'products', item.produto_id);
         const qtd = Number(item.quantidade) || 1;
         batch.update(pRef, { estoque: increment(-qtd) });
       }
     }
-    
+
     await batch.commit();
 
-    // Sincroniza cliente com banco de dados centralizado se tiver nome ou telefone
     if (newSale.cliente_nome && newSale.cliente_nome !== 'Balcão' && (cleanTel || newSale.cliente_nome.length >= 2)) {
-      this.saveOrUpdateCustomer({
-        nome: newSale.cliente_nome,
-        telefone: cleanTel || newSale.telefone_comprador || '',
-        valorAdicional: Number(sale.total) || 0,
-        origem: sale.tipo_pedido === 'reserva' ? 'reserva' : (sale.paymentMethod === PaymentMethod.FIADO ? 'fiado' : 'pdv')
-      }, operatorName || 'Caixa', operatorId || '0').catch(err => console.warn("Erro ao sincronizar cliente da venda:", err));
+      this.saveOrUpdateCustomer(
+        {
+          nome: newSale.cliente_nome,
+          telefone: cleanTel || newSale.telefone_comprador || '',
+          valorAdicional: Number(sale.total) || 0,
+          origem: sale.tipo_pedido === 'reserva' ? 'reserva' : sale.paymentMethod === PaymentMethod.FIADO ? 'fiado' : 'pdv'
+        },
+        operatorName || 'Caixa',
+        operatorId || '0'
+      ).catch((err) => console.warn('Erro ao sincronizar cliente da venda:', err));
     }
 
-    // Registra log de auditoria da venda com operador real
     const formaLabel = (sale.paymentMethod || '').toUpperCase();
     const tipoOrigem = sale.tipo_pedido === 'reserva' ? 'Reserva Online' : 'PDV Balcão';
     const acaoLabel = sale.paymentMethod === PaymentMethod.FIADO ? 'Venda Fiada Registrada' : 'Venda Concluída';
@@ -346,12 +423,13 @@ export const db = {
       operatorId || '0',
       acaoLabel,
       `[${tipoOrigem}] R$ ${(Number(sale.total) || 0).toFixed(2)} (${formaLabel}) - Cliente: ${newSale.cliente_nome}`
-    ).catch(err => console.error("Log venda silenciado:", err));
+    ).catch((err) => console.error('Log venda silenciado:', err));
 
     return newSale as Sale;
   },
 
   async payFiado(pedidoId: string, method: PaymentMethod, operatorName?: string, operatorId?: string) {
+    await ensureAuthReady();
     await updateDoc(doc(dbInstance, 'sales', pedidoId), {
       status: 'pago',
       pago_com: method
@@ -361,10 +439,11 @@ export const db = {
       operatorId || '0',
       'Baixa de Fiado',
       `Fiado #${pedidoId.slice(-6).toUpperCase()} quitado com sucesso via ${(method || '').toUpperCase()}`
-    ).catch(err => console.error("Log fiado silenciado:", err));
+    ).catch((err) => console.error('Log fiado silenciado:', err));
   },
 
   async updateSale(pedidoId: string, data: any, operatorName?: string, operatorId?: string) {
+    await ensureAuthReady();
     await updateDoc(doc(dbInstance, 'sales', pedidoId), data);
     if (data.status_entrega === 'entregue') {
       this.logAction(
@@ -383,7 +462,55 @@ export const db = {
     }
   },
 
-  async updateFiadoCustomer(saleIds: string[], cliente_nome: string, telefone_comprador?: string, operatorName?: string, operatorId?: string) {
+  async updateSaleContact(
+    saleId: string,
+    telefone: string,
+    cliente_nome?: string,
+    operatorName?: string,
+    operatorId?: string
+  ) {
+    await ensureAuthReady();
+    const rawTel = (telefone || '').trim();
+    const cleanTel = normalizePhone(rawTel);
+    const formattedTel = cleanTel ? formatPhone(cleanTel) : rawTel;
+    const updates: any = {
+      telefone_comprador: formattedTel,
+      telefone_limpo: cleanTel || ''
+    };
+    const cleanName = (cliente_nome || '').trim();
+    if (cleanName) {
+      updates.cliente_nome = cleanName;
+    }
+    await updateDoc(doc(dbInstance, 'sales', saleId), updates);
+
+    if (cleanName && cleanName !== 'Balcão' && cleanName !== 'Sem Nome' && (cleanTel || rawTel)) {
+      this.saveOrUpdateCustomer(
+        {
+          nome: cleanName,
+          telefone: cleanTel || rawTel,
+          origem: 'pdv'
+        },
+        operatorName,
+        operatorId
+      ).catch(() => {});
+    }
+
+    this.logAction(
+      operatorName || 'Operador',
+      operatorId || '0',
+      'Contato da Venda Atualizado',
+      `Telefone ${formattedTel || 'removido'} vinculado à venda #${saleId.slice(-6).toUpperCase()}`
+    ).catch(() => {});
+  },
+
+  async updateFiadoCustomer(
+    saleIds: string[],
+    cliente_nome: string,
+    telefone_comprador?: string,
+    operatorName?: string,
+    operatorId?: string
+  ) {
+    await ensureAuthReady();
     const cleanNome = (cliente_nome || '').trim() || 'Sem Nome';
     const rawTel = (telefone_comprador || '').trim();
     const cleanTel = normalizePhone(rawTel);
@@ -401,11 +528,15 @@ export const db = {
     await batch.commit();
 
     if (cleanNome !== 'Sem Nome' && (cleanTel || rawTel)) {
-      this.saveOrUpdateCustomer({
-        nome: cleanNome,
-        telefone: cleanTel || rawTel,
-        origem: 'fiado'
-      }, operatorName, operatorId).catch(() => {});
+      this.saveOrUpdateCustomer(
+        {
+          nome: cleanNome,
+          telefone: cleanTel || rawTel,
+          origem: 'fiado'
+        },
+        operatorName,
+        operatorId
+      ).catch(() => {});
     }
 
     this.logAction(
@@ -413,71 +544,75 @@ export const db = {
       operatorId || '0',
       'Edição de Fiado',
       `Dados do cliente fiado atualizados: ${cleanNome} (Tel: ${formattedTel || 'Não informado'}) em ${saleIds.length} venda(s)`
-    ).catch(err => console.error("Log fiado silenciado:", err));
+    ).catch((err) => console.error('Log fiado silenciado:', err));
   },
 
   async deleteUser(userId: string, userName: string, operatorName: string, operatorId: string) {
+    await ensureAuthReady();
     await deleteDoc(doc(dbInstance, 'users', userId));
     await this.logAction(operatorName, operatorId, 'Exclusão de Usuário', `Usuário Removido: ${userName}`);
   },
 
   async saveUser(user: Partial<User>, operatorName?: string, operatorId?: string) {
-     try {
-       const userRef = user.id ? doc(dbInstance, 'users', user.id) : doc(collection(dbInstance, 'users'));
-       const payload = { ...user, id: userRef.id };
-       await setDoc(userRef, payload, { merge: true });
-       
-       if (operatorName && operatorId) {
-         await this.logAction(operatorName, operatorId, user.id ? 'Edição de Usuário' : 'Novo Usuário', `Usuário: ${user.usuario}`);
-       }
-     } catch (e: any) {
-       console.error("Erro ao salvar usuário:", e);
-       throw e;
-     }
+    await ensureAuthReady();
+    try {
+      const userRef = user.id ? doc(dbInstance, 'users', user.id) : doc(collection(dbInstance, 'users'));
+      const payload = { ...user, id: userRef.id };
+      await setDoc(userRef, payload, { merge: true });
+
+      if (operatorName && operatorId) {
+        await this.logAction(operatorName, operatorId, user.id ? 'Edição de Usuário' : 'Novo Usuário', `Usuário: ${user.usuario}`);
+      }
+    } catch (e: any) {
+      console.error('Erro ao salvar usuário:', e);
+      throw e;
+    }
   },
 
   async saveSettings(settings: AppSettings, operatorName?: string, operatorId?: string) {
+    await ensureAuthReady();
     await setDoc(doc(dbInstance, 'settings', 'global'), settings, { merge: true });
     if (operatorName && operatorId) {
       await this.logAction(operatorName, operatorId, 'Alteração de Configurações', 'Configurações globais atualizadas');
     }
   },
-  
+
   async loginAsSuperAdmin(email: string, pass: string) {
     try {
       const fullEmail = email.includes('@') ? email : `${email}@gmail.com`;
       const userCredential = await signInWithEmailAndPassword(auth, fullEmail, pass);
       return userCredential.user;
     } catch (e: any) {
-      console.error("Super Admin Login Error:", e);
-      throw new Error("Erro na autenticação mestra: " + (e.message || "Senha incorreta."));
+      console.error('Super Admin Login Error:', e);
+      throw new Error('Erro na autenticação mestra: ' + (e.message || 'Senha incorreta.'));
     }
   },
 
   async logout() {
     await signOut(auth);
-    await signInAnonymously(auth); // Volta para anonimo para manter conexao dos funcionarios
+    authReadyPromise = null;
+    await signInAnonymously(auth).catch(() => {});
   },
 
   async checkHealth() {
     try {
       const testRef = doc(dbInstance, 'settings', 'global');
       await getDoc(testRef);
-      return { 
-        details: { 
-          'Status': 'OK', 
+      return {
+        details: {
+          Status: 'OK',
           'ID do Projeto': (firebaseConfig as any).projectId,
-          'Auth': auth.currentUser?.isAnonymous ? 'Anônimo' : (auth.currentUser?.email || 'Nenhum')
-        } 
+          Auth: auth.currentUser?.isAnonymous ? 'Anônimo' : auth.currentUser?.email || 'Nenhum'
+        }
       };
     } catch (e: any) {
-      console.error("Health check error:", e);
-      return { 
-        details: { 
-          'Erro': 'Falha na Conexão', 
-          'Código': e.code || 'Desconhecido',
-          'Aviso': 'Verifique se o Banco de Dados existe e as regras foram publicadas.'
-        } 
+      console.error('Health check error:', e);
+      return {
+        details: {
+          Erro: 'Falha na Conexão',
+          Código: e.code || 'Desconhecido',
+          Aviso: 'Verifique se o Banco de Dados existe e as regras foram publicadas.'
+        }
       };
     }
   },
@@ -498,55 +633,61 @@ export const db = {
       await setDoc(logRef, logData);
       return logData;
     } catch (e) {
-      console.error("Erro ao registrar log de auditoria:", e);
+      console.error('Erro ao registrar log de auditoria:', e);
       return null;
     }
   },
 
   subscribeToLogs: (onUpdate: (logs: any[]) => void, onError?: (err: any) => void) => {
-    // Consulta direta sem necessidade de índice composto customizado no Firestore
     const q = query(collection(dbInstance, 'logs'), limit(300));
-    return onSnapshot(q, (snapshot) => {
-      // Se a coleção estiver vazia, cria um registro inicial de boas-vindas
-      if (snapshot.empty) {
-        const welcomeRef = doc(collection(dbInstance, 'logs'));
-        setDoc(welcomeRef, {
-          id: welcomeRef.id,
-          usuario_nome: 'Sistema TUSEMM',
-          usuario_id: '0',
-          acao: 'Auditoria Ativada',
-          detalhes: 'Monitoramento de alterações e auditoria de vendas iniciado com sucesso.',
-          data: new Date().toISOString()
-        }).catch(() => {});
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        if (snapshot.empty) {
+          const welcomeRef = doc(collection(dbInstance, 'logs'));
+          setDoc(welcomeRef, {
+            id: welcomeRef.id,
+            usuario_nome: 'Sistema TUSEMM',
+            usuario_id: '0',
+            acao: 'Auditoria Ativada',
+            detalhes: 'Monitoramento de alterações e auditoria de vendas iniciado com sucesso.',
+            data: new Date().toISOString()
+          }).catch(() => {});
+        }
+
+        const logs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+        logs.sort((a: any, b: any) => {
+          const timeA = new Date(a.data || a.created_at || 0).getTime();
+          const timeB = new Date(b.data || b.created_at || 0).getTime();
+          return timeB - timeA;
+        });
+        onUpdate(logs);
+      },
+      (error) => {
+        console.error('Erro ao ouvir logs:', error);
+        onError && onError(error);
       }
-      
-      const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      // Ordenação na memória por data decrescente (mais recente primeiro)
-      logs.sort((a: any, b: any) => {
-        const timeA = new Date(a.data || a.created_at || 0).getTime();
-        const timeB = new Date(b.data || b.created_at || 0).getTime();
-        return timeB - timeA;
-      });
-      onUpdate(logs);
-    }, (error) => {
-      console.error("Erro ao ouvir logs:", error);
-      onError && onError(error);
-    });
+    );
   },
 
   subscribeToCashShifts: (onUpdate: (shifts: CashShift[]) => void, onError?: (err: any) => void) => {
     const q = query(collection(dbInstance, 'cash_shifts'), limit(100));
-    return onSnapshot(q, (snapshot) => {
-      const shifts = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as CashShift));
-      shifts.sort((a, b) => new Date(b.aberto_em).getTime() - new Date(a.aberto_em).getTime());
-      onUpdate(shifts);
-    }, (error) => {
-      console.error("Erro ao ouvir turnos de caixa:", error);
-      onError && onError(error);
-    });
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const shifts = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as CashShift));
+        shifts.sort((a, b) => new Date(b.aberto_em).getTime() - new Date(a.aberto_em).getTime());
+        onUpdate(shifts);
+      },
+      (error) => {
+        console.error('Erro ao ouvir turnos de caixa:', error);
+        onError && onError(error);
+      }
+    );
   },
 
   async openCashShift(valorAbertura: number, operadorNome: string, operadorId: string): Promise<CashShift> {
+    await ensureAuthReady();
     const shiftRef = doc(collection(dbInstance, 'cash_shifts'));
     const newShift: CashShift = {
       id: shiftRef.id,
@@ -560,14 +701,27 @@ export const db = {
       total_suprimentos: 0
     };
     await setDoc(shiftRef, newShift);
-    await this.logAction(operadorNome, operadorId, 'Abertura de Caixa', `Turno de caixa aberto com troco inicial de R$ ${(Number(valorAbertura) || 0).toFixed(2)}`);
+    await this.logAction(
+      operadorNome,
+      operadorId,
+      'Abertura de Caixa',
+      `Turno de caixa aberto com troco inicial de R$ ${(Number(valorAbertura) || 0).toFixed(2)}`
+    );
     return newShift;
   },
 
-  async addCashMovement(shiftId: string, tipo: 'sangria' | 'suprimento', valor: number, motivo: string, operadorNome: string, operadorId: string) {
+  async addCashMovement(
+    shiftId: string,
+    tipo: 'sangria' | 'suprimento',
+    valor: number,
+    motivo: string,
+    operadorNome: string,
+    operadorId: string
+  ) {
+    await ensureAuthReady();
     const shiftRef = doc(dbInstance, 'cash_shifts', shiftId);
     const snap = await getDoc(shiftRef);
-    if (!snap.exists()) throw new Error("Turno de caixa não encontrado.");
+    if (!snap.exists()) throw new Error('Turno de caixa não encontrado.');
     const shift = snap.data() as CashShift;
     const movement: CashMovement = {
       id: Math.random().toString(36).substring(2, 9),
@@ -580,8 +734,8 @@ export const db = {
     };
     const currentMovements = shift.movimentacoes || [];
     const updatedMovements = [...currentMovements, movement];
-    const totalSangrias = updatedMovements.filter(m => m.tipo === 'sangria').reduce((a, b) => a + (Number(b.valor) || 0), 0);
-    const totalSuprimentos = updatedMovements.filter(m => m.tipo === 'suprimento').reduce((a, b) => a + (Number(b.valor) || 0), 0);
+    const totalSangrias = updatedMovements.filter((m) => m.tipo === 'sangria').reduce((a, b) => a + (Number(b.valor) || 0), 0);
+    const totalSuprimentos = updatedMovements.filter((m) => m.tipo === 'suprimento').reduce((a, b) => a + (Number(b.valor) || 0), 0);
 
     await updateDoc(shiftRef, {
       movimentacoes: updatedMovements,
@@ -593,7 +747,16 @@ export const db = {
     await this.logAction(operadorNome, operadorId, label, `R$ ${(Number(valor) || 0).toFixed(2)} - ${movement.motivo}`);
   },
 
-  async closeCashShift(shiftId: string, valorInformado: number, valorCalculado: number, totaisVendas: any, obs: string, operadorNome: string, operadorId: string) {
+  async closeCashShift(
+    shiftId: string,
+    valorInformado: number,
+    valorCalculado: number,
+    totaisVendas: any,
+    obs: string,
+    operadorNome: string,
+    operadorId: string
+  ) {
+    await ensureAuthReady();
     const shiftRef = doc(dbInstance, 'cash_shifts', shiftId);
     const diferenca = Number((valorInformado - valorCalculado).toFixed(2));
     const updateData: Partial<CashShift> = {
@@ -604,15 +767,27 @@ export const db = {
       valor_fechamento_informado: Number(valorInformado) || 0,
       valor_fechamento_calculado: Number(valorCalculado) || 0,
       diferenca: diferenca,
-      observacoes_fechamento: obs.trim() || undefined,
       total_vendas_dinheiro: totaisVendas.dinheiro || 0,
       total_vendas_pix: totaisVendas.pix || 0,
       total_vendas_debito: totaisVendas.debito || 0,
       total_vendas_credito: totaisVendas.credito || 0,
       total_vendas_fiado: totaisVendas.fiado || 0
     };
+    if (obs && obs.trim()) {
+      updateData.observacoes_fechamento = obs.trim();
+    }
     await updateDoc(shiftRef, updateData);
-    const diffStatus = diferenca === 0 ? 'Conferência Exata' : (diferenca > 0 ? `Sobra de R$ ${diferenca.toFixed(2)}` : `Falta de R$ ${Math.abs(diferenca).toFixed(2)}`);
-    await this.logAction(operadorNome, operadorId, 'Fechamento de Caixa', `Turno encerrado. Informado: R$ ${valorInformado.toFixed(2)} | Esperado: R$ ${valorCalculado.toFixed(2)} (${diffStatus})`);
+    const diffStatus =
+      diferenca === 0
+        ? 'Conferência Exata'
+        : diferenca > 0
+          ? `Sobra de R$ ${diferenca.toFixed(2)}`
+          : `Falta de R$ ${Math.abs(diferenca).toFixed(2)}`;
+    await this.logAction(
+      operadorNome,
+      operadorId,
+      'Fechamento de Caixa',
+      `Turno encerrado. Informado: R$ ${valorInformado.toFixed(2)} | Esperado: R$ ${valorCalculado.toFixed(2)} (${diffStatus})`
+    );
   }
 };

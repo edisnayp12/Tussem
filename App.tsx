@@ -15,12 +15,26 @@ import KdsView from './components/KdsView';
 import CashRegisterView from './components/CashRegisterView';
 import AIAssistantModal from './components/AIAssistantModal';
 import { safeStorage } from './utils/safeStorage';
+import { FeedbackProvider, useFeedback } from './components/FeedbackProvider';
 import { 
   initAutoUpdateWatcher, 
   subscribeToUpdateNotice, 
   checkForAppUpdates, 
   forceAppUpdate 
 } from './services/autoUpdateService';
+
+const isCurrentRouteReserva = (): boolean => {
+  try {
+    const pathClean = window.location.pathname.toLowerCase().replace(/\/+$/, '');
+    return (
+      pathClean === '/reserva' ||
+      window.location.hash.toLowerCase().includes('reserva') ||
+      new URLSearchParams(window.location.search).get('view') === 'reserva'
+    );
+  } catch {
+    return false;
+  }
+};
 
 const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos (600.000 ms)
 const SESSION_USER_KEY = 'cantina_user_session';
@@ -50,7 +64,8 @@ const getInitialTheme = (): 'light' | 'dark' => {
   }
 };
 
-const App: React.FC = () => {
+const AppContent: React.FC = () => {
+  const { showToast } = useFeedback();
   const [currentUser, setCurrentUser] = useState<User | null>(getInitialUser);
   const [activeTab, setActiveTab] = useState('home');
   const [products, setProducts] = useState<Product[]>([]);
@@ -321,7 +336,8 @@ const App: React.FC = () => {
       }
     }
 
-    const foundUser = users.find(u => u.usuario === loginData.user && u.ativo);
+    const typedUser = loginData.user.trim();
+    const foundUser = users.find(u => u.usuario.trim() === typedUser && u.ativo);
     
     if (foundUser && foundUser.senha === loginData.pass) {
       saveUserSession(foundUser);
@@ -329,7 +345,7 @@ const App: React.FC = () => {
       if (foundUser.perfil === UserRole.KDS) {
         setActiveTab('kds');
       }
-    } else if (loginData.user === 'Tusemm' && loginData.pass === 'Tusemm@7') {
+    } else if (typedUser === 'Tusemm' && loginData.pass === 'Tusemm@7') {
       const masterUser: User = { id: '0', nome: 'Master Admin', usuario: 'Tusemm', perfil: UserRole.ADMIN, ativo: true };
       saveUserSession(masterUser);
       db.logAction('Master Admin', '0', 'Login Master', 'Acesso com usuário mestre Tusemm').catch(() => {});
@@ -338,8 +354,9 @@ const App: React.FC = () => {
     }
   };
 
-  const handleCompleteSale = async (data: any) => {
-    if (!currentUser && window.location.pathname !== '/reserva') return;
+  const handleCompleteSale = async (data: any): Promise<Sale | void> => {
+    const isReserva = isCurrentRouteReserva();
+    if (!currentUser && !isReserva) return;
     try {
       const saleItems = data.items.map((i: any) => ({
         produto_id: i.produto_id,
@@ -348,9 +365,10 @@ const App: React.FC = () => {
         quantidade: Number(i.quantidade) || 1,
         subtotal: Number(i.subtotal) || 0
       }));
-      await db.createSale(data, saleItems, currentUser?.id || null, currentUser?.nome);
+      const savedSale = await db.createSale(data, saleItems, currentUser?.id || null, currentUser?.nome);
+      return savedSale;
     } catch (e: any) {
-      alert("Erro ao registrar venda: " + (e.message || "Erro inesperado"));
+      showToast('Erro ao registrar venda: ' + (e?.message || 'Erro inesperado'), 'error');
       throw e;
     }
   };
@@ -375,7 +393,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleSaveCustomer = async (data: { nome: string; telefone: string }) => {
+  const handleSaveCustomer = async (data: { id?: string; nome: string; telefone: string }) => {
     await db.saveOrUpdateCustomer(data, currentUser?.nome, currentUser?.id);
   };
 
@@ -383,23 +401,38 @@ const App: React.FC = () => {
     await db.deleteCustomer(customerId, customerName, currentUser?.nome, currentUser?.id);
   };
 
-  const pathClean = window.location.pathname.toLowerCase().replace(/\/+$/, '');
-  const isReservaRoute = 
-    pathClean === '/reserva' ||
-    window.location.hash.toLowerCase().includes('reserva') ||
-    new URLSearchParams(window.location.search).get('view') === 'reserva';
+  const handleUpdateSaleContact = async (saleId: string, telefone: string, cliente_nome?: string) => {
+    await db.updateSaleContact(saleId, telefone, cliente_nome, currentUser?.nome, currentUser?.id);
+  };
+
+  const isReservaRoute = isCurrentRouteReserva();
 
   if (isReservaRoute) {
     if (isLoading && products.length === 0) {
       return (
-        <div className="min-h-screen bg-gray-50 dark:bg-[#0d081a] flex flex-col items-center justify-center text-purple-950 dark:text-white p-6 text-center">
+        <div className="min-h-[100dvh] bg-gray-50 dark:bg-[#0d081a] flex flex-col items-center justify-center text-purple-950 dark:text-white p-6 text-center">
           <div className="w-16 h-16 border-4 border-purple-200 dark:border-purple-900 border-t-purple-600 rounded-full animate-spin mb-4"></div>
           <h2 className="text-xl font-black uppercase tracking-tight">Carregando Cardápio...</h2>
           <p className="text-xs text-gray-400 dark:text-purple-300/60 mt-1 uppercase font-bold tracking-widest">{settings.cantinaName}</p>
         </div>
       );
     }
-    return <ReservaView products={products} settings={settings} onReserve={handleCompleteSale} />;
+    return (
+      <>
+        <ReservaView products={products} settings={settings} onReserve={async (d) => { await handleCompleteSale(d); }} />
+        {updateNotice && (
+          <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[250] max-w-md w-[92%] bg-purple-950 text-white px-5 py-4 rounded-3xl shadow-2xl border border-purple-500/40 flex items-center gap-4 animate-in slide-in-from-top-4 duration-300 backdrop-blur-md">
+            <div className="w-10 h-10 rounded-2xl bg-purple-800/80 flex items-center justify-center shrink-0">
+              <i className={`fa-solid fa-arrows-rotate text-purple-200 text-base ${isCheckingUpdate ? 'animate-spin' : ''}`}></i>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-wider text-purple-300">Atualização do Sistema</p>
+              <p className="text-xs font-bold text-white mt-0.5 leading-snug truncate">{updateNotice}</p>
+            </div>
+          </div>
+        )}
+      </>
+    );
   }
 
   if (isLoading && !currentUser) return (
@@ -483,7 +516,8 @@ const App: React.FC = () => {
             settings={settings} 
             fiados={fiados}
             customers={customers}
-            onCompleteSale={handleCompleteSale} 
+            onCompleteSale={handleCompleteSale}
+            onUpdateSaleContact={handleUpdateSaleContact}
           />
         )}
         {activeTab === 'caixa' && (
@@ -505,7 +539,7 @@ const App: React.FC = () => {
             onUpdateFiadoCustomer={async (saleIds, nome, telefone) => {
               await db.updateFiadoCustomer(saleIds, nome, telefone, currentUser?.nome, currentUser?.id);
             }}
-            onAddFiadoSale={handleCompleteSale}
+            onAddFiadoSale={async (d) => { await handleCompleteSale(d); }}
             onNavigateToPDV={() => setActiveTab('venda')}
             onLogBatchDispatch={async (count, total) => {
               await db.logAction(
@@ -536,7 +570,16 @@ const App: React.FC = () => {
             currentUser={currentUser!} 
           />
         )}
-        {activeTab === 'relatorios' && <ReportsView sales={sales} users={users} products={products} customers={customers} />}
+        {activeTab === 'relatorios' && (
+          <ReportsView
+            sales={sales}
+            users={users}
+            products={products}
+            customers={customers}
+            settings={settings}
+            onUpdateSaleContact={handleUpdateSaleContact}
+          />
+        )}
         {activeTab === 'kds' && <KdsView sales={sales} onUpdateSale={async (id, data) => await db.updateSale(id, data, currentUser?.nome, currentUser?.id)} currentUser={currentUser} />}
         {activeTab === 'logs' && <LogView logs={logs} />}
         {activeTab === 'config' && (
@@ -591,5 +634,11 @@ const App: React.FC = () => {
     </>
   );
 };
+
+const App: React.FC = () => (
+  <FeedbackProvider>
+    <AppContent />
+  </FeedbackProvider>
+);
 
 export default App;

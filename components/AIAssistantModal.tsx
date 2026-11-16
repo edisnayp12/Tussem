@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Sale, Product, AppSettings, Customer } from '../types';
+import { getLocalDateString, formatSafeTime } from '../utils/browserUtils';
 
 interface AIAssistantModalProps {
   isOpen: boolean;
@@ -30,7 +31,7 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
     {
       sender: 'ai',
       text: 'Olá! Sou a Inteligência Artificial da Cantina TUSEMM. Como posso te ajudar hoje com a gestão de vendas, estoque, fiados ou estratégias de lucro?',
-      time: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      time: formatSafeTime(new Date())
     }
   ]);
   const [inputText, setInputText] = useState('');
@@ -50,8 +51,8 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
   if (!isOpen) return null;
 
   // Montar contexto atual em tempo real
-  const today = new Date().toLocaleDateString('en-CA');
-  const todaySales = sales.filter(s => new Date(s.created_at).toLocaleDateString('en-CA') === today);
+  const today = getLocalDateString();
+  const todaySales = sales.filter(s => getLocalDateString(s.created_at) === today);
   const totalFaturamento = todaySales.filter(s => s.status === 'pago').reduce((a, b) => a + (Number(b.valor_total) || 0), 0);
   const totalFiados = fiados.reduce((a, b) => a + (Number(b.valor_total) || 0), 0);
   const lowStock = products.filter(p => (Number(p.estoque) || 0) <= (Number(p.estoque_minimo) || 5));
@@ -76,7 +77,7 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
     const userMsg: Message = {
       sender: 'user',
       text,
-      time: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      time: formatSafeTime(new Date())
     };
 
     setMessages(prev => [...prev, userMsg]);
@@ -107,7 +108,7 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
       const aiMsg: Message = {
         sender: 'ai',
         text: data.answer || 'Desculpe, não consegui processar a resposta no momento.',
-        time: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+        time: formatSafeTime(new Date())
       };
       setMessages(prev => [...prev, aiMsg]);
     } catch (err: any) {
@@ -116,7 +117,7 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
         {
           sender: 'ai',
           text: `Erro ao conectar com a IA: ${err.message || 'Verifique a conexão com a internet.'}`,
-          time: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+          time: formatSafeTime(new Date())
         }
       ]);
     } finally {
@@ -133,7 +134,7 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/80 z-[120] flex items-center justify-center p-3 sm:p-4 backdrop-blur-md animate-in fade-in">
-      <div className="bg-white dark:bg-[#160e2b] rounded-[32px] sm:rounded-[40px] w-full max-w-2xl h-[85vh] max-h-[700px] shadow-2xl flex flex-col border border-purple-200 dark:border-purple-900/50 overflow-hidden">
+      <div className="bg-white dark:bg-[#160e2b] rounded-[32px] sm:rounded-[40px] w-full max-w-2xl h-[85dvh] max-h-[700px] shadow-2xl flex flex-col border border-purple-200 dark:border-purple-900/50 overflow-hidden">
         
         {/* Header */}
         <div className="bg-gradient-to-r from-purple-950 via-purple-900 to-indigo-950 p-4 sm:p-5 text-white flex justify-between items-center border-b border-white/10 flex-shrink-0">

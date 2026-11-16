@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Habilita dark: via classe .dark no Tailwind CSS v4 em todos os navegadores */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-tusemm-dark: #0d081a;
   --color-tusemm-card: #170f2b;
@@ -13,7 +16,110 @@
   html, body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
   }
+
+  /* Evita zoom automático indesejado ao focar inputs no iOS Safari */
+  @media (max-width: 768px) {
+    input[type="text"],
+    input[type="password"],
+    input[type="tel"],
+    input[type="number"],
+    input[type="date"],
+    input[type="month"],
+    select,
+    textarea {
+      font-size: max(16px, 0.875rem);
+    }
+  }
+}
+
+/* Utilitários de scrollbar compatíveis com Chrome, Safari, Edge e Firefox */
+.scrollbar-hide,
+.no-scrollbar,
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar,
+.no-scrollbar::-webkit-scrollbar,
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Utilitário extra de escala suave */
+.active\:scale-98:active {
+  transform: scale(0.98);
+}
+
+/* Animações cross-browser equivalentes ao tailwindcss-animate */
+@keyframes tusemm-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes tusemm-zoom-in-95 {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes tusemm-slide-top-2 {
+  from { opacity: 0; transform: translateY(-0.5rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tusemm-slide-top-4 {
+  from { opacity: 0; transform: translateY(-1rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tusemm-slide-bottom-2 {
+  from { opacity: 0; transform: translateY(0.5rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tusemm-slide-bottom-6 {
+  from { opacity: 0; transform: translateY(1.5rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tusemm-slide-right-2 {
+  from { opacity: 0; transform: translateX(0.5rem); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-in {
+  animation-duration: 220ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  animation-fill-mode: both;
+}
+
+.fade-in {
+  animation-name: tusemm-fade-in;
+}
+
+.zoom-in-95 {
+  animation-name: tusemm-zoom-in-95;
+}
+
+.slide-in-from-top-2 {
+  animation-name: tusemm-slide-top-2;
+}
+
+.slide-in-from-top-4 {
+  animation-name: tusemm-slide-top-4;
+}
+
+.slide-in-from-bottom-2 {
+  animation-name: tusemm-slide-bottom-2;
+}
+
+.slide-in-from-bottom-6 {
+  animation-name: tusemm-slide-bottom-6;
+}
+
+.slide-in-from-right-2 {
+  animation-name: tusemm-slide-right-2;
 }
 
 /* Cantina TUSEMM Dark Palette overrides */

@@ -1,12 +1,14 @@
 import React, { useState, useMemo } from 'react';
-import { Customer, Sale, User, PaymentMethod } from '../types';
+import { Customer, Sale, User } from '../types';
 import { normalizePhone, formatPhone, getWhatsAppLink } from '../utils/phoneUtils';
+import { formatSafeDateTime } from '../utils/browserUtils';
+import { useFeedback } from './FeedbackProvider';
 
 interface CustomersViewProps {
   customers: Customer[];
   sales: Sale[];
   currentUser: User | null;
-  onSaveCustomer: (customerData: { nome: string; telefone: string }) => Promise<void>;
+  onSaveCustomer: (customerData: { id?: string; nome: string; telefone: string }) => Promise<void>;
   onDeleteCustomer: (customerId: string, customerName: string) => Promise<void>;
   onSelectCustomerForSale?: (customer: Customer) => void;
 }
@@ -19,6 +21,7 @@ const CustomersView: React.FC<CustomersViewProps> = ({
   onDeleteCustomer,
   onSelectCustomerForSale
 }) => {
+  const { showToast, confirmAction } = useFeedback();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<'todos' | 'com_fiado' | 'reservas'>('todos');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -151,32 +154,44 @@ const CustomersView: React.FC<CustomersViewProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputNome.trim()) return;
+    if (!inputNome.trim()) {
+      showToast('Informe o nome do cliente.', 'warning');
+      return;
+    }
 
     setIsSubmitting(true);
     try {
       await onSaveCustomer({
+        id: editingCustomer?.id,
         nome: inputNome.trim(),
         telefone: inputTelefone.trim()
       });
+      showToast(editingCustomer ? 'Dados do cliente atualizados!' : 'Cliente cadastrado com sucesso!', 'success');
       setIsModalOpen(false);
       setInputNome('');
       setInputTelefone('');
       setEditingCustomer(null);
     } catch (err: any) {
-      console.error("Erro ao salvar cliente:", err);
+      showToast('Erro ao salvar cliente: ' + (err?.message || 'Tente novamente'), 'error');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleDelete = async (customer: Customer) => {
-    if (confirm(`Deseja remover o cadastro de ${customer.nome}? Todas as vendas continuarão salvas.`)) {
-      try {
-        await onDeleteCustomer(customer.id, customer.nome);
-      } catch (err) {
-        console.error("Erro ao excluir cliente:", err);
-      }
+    const confirmed = await confirmAction({
+      title: 'Remover Cliente',
+      message: `Deseja remover o cadastro de "${customer.nome}"? Todas as vendas históricas continuarão salvas.`,
+      confirmLabel: 'Remover',
+      destructive: true
+    });
+    if (!confirmed) return;
+
+    try {
+      await onDeleteCustomer(customer.id, customer.nome);
+      showToast(`Cadastro de "${customer.nome}" removido.`, 'success');
+    } catch (err: any) {
+      showToast('Erro ao excluir cliente: ' + (err?.message || 'Tente novamente'), 'error');
     }
   };
 
@@ -190,10 +205,10 @@ const CustomersView: React.FC<CustomersViewProps> = ({
               <i className="fa-solid fa-users"></i>
             </div>
             <div>
-              <h2 className="text-2xl font-black text-purple-950 uppercase tracking-tight leading-none">
+              <h2 className="text-2xl font-black text-purple-950 dark:text-white uppercase tracking-tight leading-none">
                 Base de Clientes
               </h2>
-              <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mt-1">
+              <p className="text-[10px] text-gray-500 dark:text-purple-300/70 font-bold uppercase tracking-widest mt-1">
                 Clientes de Reservas, PDV e Fiados Agrupados por Telefone
               </p>
             </div>
@@ -213,32 +228,32 @@ const CustomersView: React.FC<CustomersViewProps> = ({
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm">
+        <div className="bg-white dark:bg-[#160e2b] p-5 rounded-3xl border border-gray-100 dark:border-purple-900/40 shadow-sm">
           <p className="text-[9px] font-black uppercase tracking-widest text-gray-400">Total de Clientes</p>
-          <p className="text-2xl font-black text-purple-950 mt-1">{consolidatedCustomers.length}</p>
+          <p className="text-2xl font-black text-purple-950 dark:text-white mt-1">{consolidatedCustomers.length}</p>
         </div>
-        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm">
+        <div className="bg-white dark:bg-[#160e2b] p-5 rounded-3xl border border-gray-100 dark:border-purple-900/40 shadow-sm">
           <p className="text-[9px] font-black uppercase tracking-widest text-gray-400">Com Fiado em Aberto</p>
-          <p className="text-2xl font-black text-amber-600 mt-1">
+          <p className="text-2xl font-black text-amber-600 dark:text-amber-400 mt-1">
             {consolidatedCustomers.filter(c => (c.total_fiado_aberto || 0) > 0).length}
           </p>
         </div>
-        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm">
+        <div className="bg-white dark:bg-[#160e2b] p-5 rounded-3xl border border-gray-100 dark:border-purple-900/40 shadow-sm">
           <p className="text-[9px] font-black uppercase tracking-widest text-gray-400">Origem Reserva</p>
-          <p className="text-2xl font-black text-blue-600 mt-1">
+          <p className="text-2xl font-black text-blue-600 dark:text-blue-400 mt-1">
             {consolidatedCustomers.filter(c => c.origem === 'reserva').length}
           </p>
         </div>
-        <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm">
+        <div className="bg-white dark:bg-[#160e2b] p-5 rounded-3xl border border-gray-100 dark:border-purple-900/40 shadow-sm">
           <p className="text-[9px] font-black uppercase tracking-widest text-gray-400">Total Gasto Consolidado</p>
-          <p className="text-2xl font-black text-green-600 mt-1">
+          <p className="text-2xl font-black text-green-600 dark:text-green-400 mt-1">
             R$ {consolidatedCustomers.reduce((acc, c) => acc + (c.total_gasto || 0), 0).toFixed(2)}
           </p>
         </div>
       </div>
 
       {/* Search and Filters */}
-      <div className="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm space-y-3">
+      <div className="bg-white dark:bg-[#160e2b] p-4 rounded-3xl border border-gray-100 dark:border-purple-900/40 shadow-sm space-y-3">
         <div className="relative">
           <i className="fa-solid fa-magnifying-glass absolute left-5 top-1/2 -translate-y-1/2 text-gray-400"></i>
           <input
@@ -246,7 +261,7 @@ const CustomersView: React.FC<CustomersViewProps> = ({
             placeholder="Buscar por nome ou por número de telefone (com ou sem separação)..."
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
-            className="w-full bg-gray-50 border-none rounded-2xl pl-12 pr-10 py-3.5 text-xs font-bold text-gray-800 placeholder-gray-400 outline-none focus:ring-2 focus:ring-purple-200"
+            className="w-full bg-gray-50 dark:bg-[#20143a] border border-transparent focus:border-purple-600 rounded-2xl pl-12 pr-10 py-3.5 text-xs font-bold text-gray-800 dark:text-white placeholder-gray-400 outline-none"
           />
           {searchTerm && (
             <button
@@ -261,24 +276,24 @@ const CustomersView: React.FC<CustomersViewProps> = ({
         <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
           <button
             onClick={() => setFilterType('todos')}
-            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
-              filterType === 'todos' ? 'bg-purple-900 text-white shadow-md' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider whitespace-nowrap transition-all ${
+              filterType === 'todos' ? 'bg-purple-900 text-white shadow-md' : 'bg-gray-100 dark:bg-[#20143a] text-gray-500 dark:text-purple-300 hover:bg-gray-200'
             }`}
           >
             Todos ({consolidatedCustomers.length})
           </button>
           <button
             onClick={() => setFilterType('com_fiado')}
-            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
-              filterType === 'com_fiado' ? 'bg-amber-600 text-white shadow-md' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider whitespace-nowrap transition-all ${
+              filterType === 'com_fiado' ? 'bg-amber-600 text-white shadow-md' : 'bg-gray-100 dark:bg-[#20143a] text-gray-500 dark:text-purple-300 hover:bg-gray-200'
             }`}
           >
             Com Fiado em Aberto
           </button>
           <button
             onClick={() => setFilterType('reservas')}
-            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
-              filterType === 'reservas' ? 'bg-purple-900 text-white shadow-md' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider whitespace-nowrap transition-all ${
+              filterType === 'reservas' ? 'bg-purple-900 text-white shadow-md' : 'bg-gray-100 dark:bg-[#20143a] text-gray-500 dark:text-purple-300 hover:bg-gray-200'
             }`}
           >
             Cadastrados na Reserva
@@ -289,7 +304,7 @@ const CustomersView: React.FC<CustomersViewProps> = ({
       {/* Customers List */}
       <div className="space-y-3">
         {filteredCustomers.length === 0 ? (
-          <div className="bg-white p-12 rounded-3xl border border-gray-100 text-center text-gray-400 space-y-3">
+          <div className="bg-white dark:bg-[#160e2b] p-12 rounded-3xl border border-gray-100 dark:border-purple-900/40 text-center text-gray-400 space-y-3">
             <i className="fa-solid fa-user-slash text-4xl opacity-40"></i>
             <p className="text-xs font-black uppercase tracking-wider">
               Nenhum cliente encontrado com os filtros atuais
@@ -310,46 +325,46 @@ const CustomersView: React.FC<CustomersViewProps> = ({
             return (
               <div
                 key={customer.id}
-                className="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm hover:border-purple-200 transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 group"
+                className="bg-white dark:bg-[#160e2b] p-5 rounded-3xl border border-gray-100 dark:border-purple-900/40 shadow-sm hover:border-purple-200 dark:hover:border-purple-700 transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 group"
               >
                 <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-purple-50 text-purple-900 rounded-2xl flex items-center justify-center font-black text-lg border border-purple-100 flex-shrink-0">
+                  <div className="w-12 h-12 bg-purple-50 dark:bg-purple-950/60 text-purple-900 dark:text-purple-200 rounded-2xl flex items-center justify-center font-black text-lg border border-purple-100 dark:border-purple-800 flex-shrink-0">
                     {customer.nome[0]?.toUpperCase() || 'C'}
                   </div>
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="font-black text-purple-950 text-sm uppercase leading-tight">
+                      <h3 className="font-black text-purple-950 dark:text-white text-sm uppercase leading-tight">
                         {customer.nome}
                       </h3>
                       {fiadoAberto > 0 && (
-                        <span className="text-[9px] font-black bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full uppercase">
+                        <span className="text-[9px] font-black bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded-full uppercase">
                           Fiado: R$ {fiadoAberto.toFixed(2)}
                         </span>
                       )}
                       {customer.origem === 'reserva' && (
-                        <span className="text-[8px] font-black bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full uppercase">
+                        <span className="text-[8px] font-black bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full uppercase">
                           Reserva
                         </span>
                       )}
                     </div>
 
-                    <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500 font-bold flex-wrap">
+                    <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500 dark:text-gray-400 font-bold flex-wrap">
                       {hasPhone ? (
-                        <span className="flex items-center gap-1.5 text-gray-700">
-                          <i className="fa-solid fa-phone text-[10px] text-purple-600"></i>
+                        <span className="flex items-center gap-1.5 text-gray-700 dark:text-gray-200">
+                          <i className="fa-solid fa-phone text-[10px] text-purple-600 dark:text-purple-400"></i>
                           <span>{customer.telefone || formatPhone(customer.telefone_limpo)}</span>
                         </span>
                       ) : (
                         <span className="text-gray-400 italic text-[11px]">Sem telefone</span>
                       )}
 
-                      <span className="text-gray-300">•</span>
+                      <span className="text-gray-300 dark:text-purple-800">•</span>
                       <span>{customer.total_pedidos || 0} pedido(s)</span>
 
                       {(customer.total_gasto || 0) > 0 && (
                         <>
-                          <span className="text-gray-300">•</span>
-                          <span className="text-green-600">Total: R$ {(customer.total_gasto || 0).toFixed(2)}</span>
+                          <span className="text-gray-300 dark:text-purple-800">•</span>
+                          <span className="text-green-600 dark:text-green-400">Total: R$ {(customer.total_gasto || 0).toFixed(2)}</span>
                         </>
                       )}
                     </div>
@@ -374,7 +389,7 @@ const CustomersView: React.FC<CustomersViewProps> = ({
                   {/* Ver Histórico */}
                   <button
                     onClick={() => setDetailCustomer(customer)}
-                    className="bg-purple-50 text-purple-900 hover:bg-purple-100 px-3.5 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-wider flex items-center gap-1.5 transition-all"
+                    className="bg-purple-50 dark:bg-purple-950/60 text-purple-900 dark:text-purple-200 hover:bg-purple-100 px-3.5 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-wider flex items-center gap-1.5 transition-all"
                     title="Ver histórico de compras/reservas"
                   >
                     <i className="fa-solid fa-receipt text-[10px]"></i>
@@ -384,7 +399,7 @@ const CustomersView: React.FC<CustomersViewProps> = ({
                   {/* Editar */}
                   <button
                     onClick={() => handleOpenEdit(customer)}
-                    className="bg-gray-100 hover:bg-gray-200 text-gray-700 p-2.5 rounded-xl text-xs active:scale-95 transition-all"
+                    className="bg-gray-100 dark:bg-[#20143a] hover:bg-gray-200 text-gray-700 dark:text-purple-200 p-2.5 rounded-xl text-xs active:scale-95 transition-all"
                     title="Editar Dados"
                   >
                     <i className="fa-solid fa-pen-to-square"></i>
@@ -393,7 +408,7 @@ const CustomersView: React.FC<CustomersViewProps> = ({
                   {/* Excluir */}
                   <button
                     onClick={() => handleDelete(customer)}
-                    className="bg-red-50 hover:bg-red-100 text-red-600 p-2.5 rounded-xl text-xs active:scale-95 transition-all"
+                    className="bg-red-50 dark:bg-red-950/50 hover:bg-red-100 text-red-600 dark:text-red-400 p-2.5 rounded-xl text-xs active:scale-95 transition-all"
                     title="Remover Cadastro"
                   >
                     <i className="fa-solid fa-trash-can"></i>
@@ -407,14 +422,14 @@ const CustomersView: React.FC<CustomersViewProps> = ({
 
       {/* Modal Criar / Editar Cliente */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 md:p-8 max-w-sm w-full shadow-2xl animate-in zoom-in-95">
-            <h3 className="text-xl font-black text-purple-950 uppercase mb-4">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setIsModalOpen(false)}>
+          <div className="bg-white dark:bg-[#160e2b] rounded-3xl p-6 md:p-8 max-w-sm w-full shadow-2xl border border-purple-100 dark:border-purple-900/40 animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+            <h3 className="text-xl font-black text-purple-950 dark:text-white uppercase mb-4">
               {editingCustomer ? 'Editar Cliente' : 'Novo Cliente'}
             </h3>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="text-[10px] font-black uppercase text-purple-950 ml-1 mb-1 block">
+                <label className="text-[10px] font-black uppercase text-purple-950 dark:text-purple-300 ml-1 mb-1 block">
                   Nome Completo
                 </label>
                 <input
@@ -422,21 +437,21 @@ const CustomersView: React.FC<CustomersViewProps> = ({
                   placeholder="Nome do Cliente"
                   value={inputNome}
                   onChange={e => setInputNome(e.target.value)}
-                  className="w-full bg-gray-50 border-2 border-transparent focus:border-purple-200 rounded-2xl px-5 py-3.5 font-bold text-xs text-purple-950 outline-none"
+                  className="w-full bg-gray-50 dark:bg-[#20143a] border-2 border-transparent focus:border-purple-500 rounded-2xl px-5 py-3.5 font-bold text-xs text-purple-950 dark:text-white outline-none"
                   required
                 />
               </div>
 
               <div>
-                <label className="text-[10px] font-black uppercase text-purple-950 ml-1 mb-1 block">
+                <label className="text-[10px] font-black uppercase text-purple-950 dark:text-purple-300 ml-1 mb-1 block">
                   Telefone / WhatsApp
                 </label>
                 <input
                   type="tel"
-                  placeholder="Ex: (11) 98765-4321 ou 11987654321"
+                  placeholder="Ex: (11) 98765-4321"
                   value={inputTelefone}
-                  onChange={e => setInputTelefone(e.target.value)}
-                  className="w-full bg-gray-50 border-2 border-transparent focus:border-purple-200 rounded-2xl px-5 py-3.5 font-bold text-xs text-purple-950 outline-none"
+                  onChange={e => setInputTelefone(formatPhone(e.target.value))}
+                  className="w-full bg-gray-50 dark:bg-[#20143a] border-2 border-transparent focus:border-purple-500 rounded-2xl px-5 py-3.5 font-bold text-xs text-purple-950 dark:text-white outline-none"
                 />
                 <p className="text-[8px] text-gray-400 mt-1 ml-1 font-bold">
                   O sistema normaliza e agrupa automaticamente independente de separação.
@@ -466,20 +481,20 @@ const CustomersView: React.FC<CustomersViewProps> = ({
 
       {/* Modal Detalhes / Extrato de Compras do Cliente */}
       {detailCustomer && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 md:p-8 max-w-lg w-full max-h-[85vh] flex flex-col shadow-2xl animate-in zoom-in-95">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setDetailCustomer(null)}>
+          <div className="bg-white dark:bg-[#160e2b] rounded-3xl p-6 md:p-8 max-w-lg w-full max-h-[85vh] flex flex-col shadow-2xl border border-purple-100 dark:border-purple-900/40 animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-start mb-4">
               <div>
-                <h3 className="text-xl font-black text-purple-950 uppercase leading-tight">
+                <h3 className="text-xl font-black text-purple-950 dark:text-white uppercase leading-tight">
                   {detailCustomer.nome}
                 </h3>
-                <p className="text-xs text-gray-500 font-bold mt-0.5">
+                <p className="text-xs text-gray-500 dark:text-purple-300 font-bold mt-0.5">
                   {detailCustomer.telefone || formatPhone(detailCustomer.telefone_limpo) || 'Sem telefone'}
                 </p>
               </div>
               <button
                 onClick={() => setDetailCustomer(null)}
-                className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center text-gray-500 hover:bg-gray-200"
+                className="w-8 h-8 bg-gray-100 dark:bg-purple-950 rounded-full flex items-center justify-center text-gray-500 dark:text-purple-300 hover:bg-gray-200"
               >
                 <i className="fa-solid fa-times"></i>
               </button>
@@ -487,15 +502,15 @@ const CustomersView: React.FC<CustomersViewProps> = ({
 
             {/* Resumo */}
             <div className="grid grid-cols-2 gap-2 mb-4">
-              <div className="bg-purple-50 p-3 rounded-2xl border border-purple-100">
-                <p className="text-[8px] font-black uppercase text-purple-700">Total Pago</p>
-                <p className="text-lg font-black text-purple-950">
+              <div className="bg-purple-50 dark:bg-purple-950/60 p-3 rounded-2xl border border-purple-100 dark:border-purple-900/40">
+                <p className="text-[8px] font-black uppercase text-purple-700 dark:text-purple-300">Total Pago</p>
+                <p className="text-lg font-black text-purple-950 dark:text-white">
                   R$ {(detailCustomer.total_gasto || 0).toFixed(2)}
                 </p>
               </div>
-              <div className="bg-amber-50 p-3 rounded-2xl border border-amber-100">
-                <p className="text-[8px] font-black uppercase text-amber-800">Fiado em Aberto</p>
-                <p className="text-lg font-black text-amber-900">
+              <div className="bg-amber-50 dark:bg-amber-950/60 p-3 rounded-2xl border border-amber-100 dark:border-amber-900/40">
+                <p className="text-[8px] font-black uppercase text-amber-800 dark:text-amber-300">Fiado em Aberto</p>
+                <p className="text-lg font-black text-amber-900 dark:text-amber-200">
                   R$ {(detailCustomer.total_fiado_aberto || 0).toFixed(2)}
                 </p>
               </div>
@@ -508,7 +523,6 @@ const CustomersView: React.FC<CustomersViewProps> = ({
 
             <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-[150px]">
               {(() => {
-                const key = detailCustomer.telefone_limpo || detailCustomer.nome.trim().toLowerCase();
                 const clientSales = sales.filter(s => {
                   const sClean = normalizePhone(s.telefone_comprador);
                   if (detailCustomer.telefone_limpo && sClean) {
@@ -526,10 +540,10 @@ const CustomersView: React.FC<CustomersViewProps> = ({
                 }
 
                 return clientSales.map(s => (
-                  <div key={s.id} className="bg-gray-50 p-3.5 rounded-2xl border border-gray-100 flex justify-between items-center text-xs">
+                  <div key={s.id} className="bg-gray-50 dark:bg-[#20143a] p-3.5 rounded-2xl border border-gray-100 dark:border-purple-900/30 flex justify-between items-center text-xs">
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-black text-purple-950 uppercase">
+                        <span className="font-black text-purple-950 dark:text-white uppercase">
                           {s.tipo_pedido === 'reserva' ? 'Reserva' : 'PDV'} #{s.id.slice(-5).toUpperCase()}
                         </span>
                         <span className={`text-[8px] font-black px-2 py-0.5 rounded-full uppercase ${
@@ -539,10 +553,10 @@ const CustomersView: React.FC<CustomersViewProps> = ({
                         </span>
                       </div>
                       <p className="text-[10px] text-gray-400 mt-1 font-bold">
-                        {new Date(s.created_at).toLocaleString('pt-BR')}
+                        {formatSafeDateTime(s.created_at)}
                       </p>
                     </div>
-                    <span className="font-black text-purple-950 text-sm">
+                    <span className="font-black text-purple-950 dark:text-white text-sm">
                       R$ {Number(s.valor_total).toFixed(2)}
                     </span>
                   </div>

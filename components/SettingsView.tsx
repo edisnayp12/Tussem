@@ -1,10 +1,9 @@
-
 import React, { useState, useEffect } from 'react';
 import { User, AppSettings, UserRole } from '../types';
 import { db } from '../services/firebaseService';
 import { storageService } from '../services/storageService';
-
 import { safeStorage } from '../utils/safeStorage';
+import { useFeedback } from './FeedbackProvider';
 
 interface SettingsViewProps {
   users: User[];
@@ -33,6 +32,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   onCheckUpdate,
   isCheckingUpdate = false
 }) => {
+  const { showToast, confirmAction } = useFeedback();
   const [dbHealth, setDbHealth] = useState<any>({});
   const [appSettings, setAppSettings] = useState(settings);
   const [themeNotice, setThemeNotice] = useState<string | null>(null);
@@ -82,10 +82,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({
       reader.onload = (event) => {
         const success = storageService.importBackup(event.target?.result as string);
         if (success) {
-          alert('Backup importado com sucesso! O aplicativo será recarregado.');
-          window.location.reload();
+          showToast('Backup importado com sucesso! Recarregando sistema...', 'success');
+          setTimeout(() => window.location.reload(), 900);
         } else {
-          alert('Erro ao importar backup. Arquivo inválido.');
+          showToast('Erro ao importar backup. Arquivo inválido.', 'error');
         }
       };
       reader.readAsText(file);
@@ -97,32 +97,48 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   const [newUser, setNewUser] = useState({ nome: '', usuario: '', senha: '', perfil: UserRole.COMMON });
 
   const handleAddUser = () => {
-    if (!newUser.nome || !newUser.usuario || !newUser.senha) return alert("Preencha todos os campos!");
-    onAddUser({ ...newUser, ativo: true });
+    if (!newUser.nome.trim() || !newUser.usuario.trim() || !newUser.senha.trim()) {
+      showToast('Preencha todos os campos para criar o usuário!', 'warning');
+      return;
+    }
+    onAddUser({ ...newUser, nome: newUser.nome.trim(), usuario: newUser.usuario.trim(), ativo: true });
+    showToast(`Usuário "${newUser.usuario.trim()}" criado com sucesso!`, 'success');
     setIsAddingUser(false);
     setNewUser({ nome: '', usuario: '', senha: '', perfil: UserRole.COMMON });
+  };
+
+  const handleDeleteUser = async (u: User) => {
+    const confirmed = await confirmAction({
+      title: 'Remover Usuário',
+      message: `Deseja remover o acesso do usuário "${u.usuario}" (${u.nome})?`,
+      confirmLabel: 'Remover',
+      destructive: true
+    });
+    if (!confirmed) return;
+    onRemoveUser(u.id);
+    showToast(`Usuário "${u.usuario}" removido.`, 'success');
   };
 
   return (
     <div className="space-y-6 pb-20 animate-in fade-in duration-500">
       <div className="flex justify-between items-end">
         <div>
-          <h2 className="text-2xl font-black text-purple-950 uppercase tracking-tighter">Ajustes</h2>
+          <h2 className="text-2xl font-black text-purple-950 dark:text-white uppercase tracking-tighter">Ajustes</h2>
           <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">Configurações de Sistema</p>
         </div>
-        <button onClick={refreshHealth} className="bg-purple-100 text-purple-600 p-3 rounded-xl hover:bg-purple-200">
+        <button onClick={refreshHealth} className="bg-purple-100 dark:bg-purple-950 text-purple-600 dark:text-purple-300 p-3 rounded-xl hover:bg-purple-200">
           <i className="fa-solid fa-rotate"></i>
         </button>
       </div>
 
       {/* Seletor de Tema (Aparência) */}
-      <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100">
+      <div className="bg-white dark:bg-[#160e2b] p-8 rounded-[32px] shadow-sm border border-gray-100 dark:border-purple-900/40">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-6">
           <div>
-            <h3 className="text-sm font-black text-purple-900 uppercase flex items-center gap-2">
+            <h3 className="text-sm font-black text-purple-900 dark:text-purple-200 uppercase flex items-center gap-2">
               <i className="fa-solid fa-palette text-purple-600"></i> Aparência e Tema
             </h3>
-            <p className="text-[10px] text-gray-500 font-bold uppercase mt-1">
+            <p className="text-[10px] text-gray-500 dark:text-purple-300/70 font-bold uppercase mt-1">
               Alterne as cores visuais mantendo a identidade da Cantina TUSEMM
             </p>
           </div>
@@ -213,23 +229,23 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
-      <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100">
-        <h3 className="text-sm font-black text-purple-900 uppercase mb-6">Configurações Gerais</h3>
+      <div className="bg-white dark:bg-[#160e2b] p-8 rounded-[32px] shadow-sm border border-gray-100 dark:border-purple-900/40">
+        <h3 className="text-sm font-black text-purple-900 dark:text-purple-200 uppercase mb-6">Configurações Gerais</h3>
         <div className="space-y-4">
           <div>
-            <label className="text-[10px] font-black text-gray-500 uppercase ml-2 mb-1 block">Nome da Cantina</label>
+            <label className="text-[10px] font-black text-gray-500 dark:text-purple-300 uppercase ml-2 mb-1 block">Nome da Cantina</label>
             <input 
               type="text" 
-              className="w-full bg-gray-50 border-none rounded-2xl px-5 py-4 font-bold text-gray-700"
+              className="w-full bg-gray-50 dark:bg-[#20143a] border-none rounded-2xl px-5 py-4 font-bold text-gray-700 dark:text-white outline-none"
               value={appSettings.cantinaName || ''}
               onChange={e => setAppSettings({...appSettings, cantinaName: e.target.value})}
             />
           </div>
 
           <div>
-            <label className="text-[10px] font-black text-gray-500 uppercase ml-2 mb-1 block">Modo de Operação PIX</label>
+            <label className="text-[10px] font-black text-gray-500 dark:text-purple-300 uppercase ml-2 mb-1 block">Modo de Operação PIX</label>
             <select 
-              className="w-full bg-gray-50 border-none rounded-2xl px-5 py-4 font-bold text-gray-700"
+              className="w-full bg-gray-50 dark:bg-[#20143a] border-none rounded-2xl px-5 py-4 font-bold text-gray-700 dark:text-white outline-none"
               value={appSettings.pixModo || 'mercadopago'} 
               onChange={(e: any) => setAppSettings({...appSettings, pixModo: e.target.value})}
             >
@@ -240,11 +256,11 @@ const SettingsView: React.FC<SettingsViewProps> = ({
 
           {(!appSettings.pixModo || appSettings.pixModo === 'mercadopago') && (
             <div>
-              <label className="text-[10px] font-black text-gray-500 uppercase ml-2 mb-1 block">Mercado Pago - Access Token (Pix)</label>
+              <label className="text-[10px] font-black text-gray-500 dark:text-purple-300 uppercase ml-2 mb-1 block">Mercado Pago - Access Token (Pix)</label>
               <input 
                 type="password" 
                 placeholder="APP_USR-..."
-                className="w-full bg-gray-50 border-none rounded-2xl px-5 py-4 font-bold text-gray-700"
+                className="w-full bg-gray-50 dark:bg-[#20143a] border-none rounded-2xl px-5 py-4 font-bold text-gray-700 dark:text-white outline-none"
                 value={appSettings.mercadoPagoToken || ''}
                 onChange={e => setAppSettings({...appSettings, mercadoPagoToken: e.target.value})}
               />
@@ -252,24 +268,27 @@ const SettingsView: React.FC<SettingsViewProps> = ({
           )}
 
           {appSettings.pixModo === 'manual' && (
-            <div className="space-y-3 bg-purple-50 p-4 rounded-3xl border border-purple-100">
+            <div className="space-y-3 bg-purple-50 dark:bg-purple-950/50 p-4 rounded-3xl border border-purple-100 dark:border-purple-900/40">
               <div>
-                 <label className="text-[10px] font-black text-purple-900 uppercase ml-2 mb-1 block">Chave PIX (CPF/CNPJ/Email/Telefone)</label>
-                 <input type="text" placeholder="Ex: 123.456.789-00 ou email@pix.com" value={appSettings.pixChave || ''} onChange={e => setAppSettings({...appSettings, pixChave: e.target.value})} className="w-full bg-white border-none rounded-2xl px-5 py-4 font-bold text-gray-700 shadow-sm" />
+                 <label className="text-[10px] font-black text-purple-900 dark:text-purple-200 uppercase ml-2 mb-1 block">Chave PIX (CPF/CNPJ/Email/Telefone)</label>
+                 <input type="text" placeholder="Ex: 123.456.789-00 ou email@pix.com" value={appSettings.pixChave || ''} onChange={e => setAppSettings({...appSettings, pixChave: e.target.value})} className="w-full bg-white dark:bg-[#160e2b] border-none rounded-2xl px-5 py-4 font-bold text-gray-700 dark:text-white shadow-sm outline-none" />
               </div>
               <div>
-                 <label className="text-[10px] font-black text-purple-900 uppercase ml-2 mb-1 block">Nome do Titular do PIX</label>
-                 <input type="text" placeholder="João da Silva" value={appSettings.pixTitular || ''} onChange={e => setAppSettings({...appSettings, pixTitular: e.target.value})} className="w-full bg-white border-none rounded-2xl px-5 py-4 font-bold text-gray-700 shadow-sm" maxLength={25} />
+                 <label className="text-[10px] font-black text-purple-900 dark:text-purple-200 uppercase ml-2 mb-1 block">Nome do Titular do PIX</label>
+                 <input type="text" placeholder="João da Silva" value={appSettings.pixTitular || ''} onChange={e => setAppSettings({...appSettings, pixTitular: e.target.value})} className="w-full bg-white dark:bg-[#160e2b] border-none rounded-2xl px-5 py-4 font-bold text-gray-700 dark:text-white shadow-sm outline-none" maxLength={25} />
               </div>
               <div>
-                 <label className="text-[10px] font-black text-purple-900 uppercase ml-2 mb-1 block">Cidade</label>
-                 <input type="text" placeholder="São Paulo" value={appSettings.pixCidade || ''} onChange={e => setAppSettings({...appSettings, pixCidade: e.target.value})} className="w-full bg-white border-none rounded-2xl px-5 py-4 font-bold text-gray-700 shadow-sm" maxLength={15} />
+                 <label className="text-[10px] font-black text-purple-900 dark:text-purple-200 uppercase ml-2 mb-1 block">Cidade</label>
+                 <input type="text" placeholder="São Paulo" value={appSettings.pixCidade || ''} onChange={e => setAppSettings({...appSettings, pixCidade: e.target.value})} className="w-full bg-white dark:bg-[#160e2b] border-none rounded-2xl px-5 py-4 font-bold text-gray-700 dark:text-white shadow-sm outline-none" maxLength={15} />
               </div>
             </div>
           )}
 
           <button 
-            onClick={() => onUpdateSettings(appSettings)}
+            onClick={() => {
+              onUpdateSettings(appSettings);
+              showToast('Configurações salvas!', 'success');
+            }}
             className="w-full bg-purple-900 text-white py-4 rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-black transition-all"
           >
             Salvar Configurações
@@ -277,49 +296,49 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
-      <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100">
-        <h3 className="text-sm font-black text-purple-900 mb-6 uppercase">Saúde do Banco Local</h3>
+      <div className="bg-white dark:bg-[#160e2b] p-8 rounded-[32px] shadow-sm border border-gray-100 dark:border-purple-900/40">
+        <h3 className="text-sm font-black text-purple-900 dark:text-purple-200 mb-6 uppercase">Saúde do Banco Local</h3>
         <div className="grid grid-cols-2 gap-3">
           {Object.entries(dbHealth).map(([table, ok]) => (
-            <div key={table} className={`p-4 rounded-2xl border flex items-center justify-between ${ok ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100'}`}>
-              <span className="text-[10px] font-black uppercase text-gray-500">{table}</span>
+            <div key={table} className={`p-4 rounded-2xl border flex items-center justify-between ${ok ? 'bg-green-50 dark:bg-green-950/50 border-green-100 dark:border-green-900/40' : 'bg-red-50 dark:bg-red-950/50 border-red-100 dark:border-red-900/40'}`}>
+              <span className="text-[10px] font-black uppercase text-gray-500 dark:text-gray-300">{table}</span>
               <span className={`w-2 h-2 rounded-full ${ok ? 'bg-green-500' : 'bg-red-500'}`}></span>
             </div>
           ))}
         </div>
         <div className="grid grid-cols-2 gap-3 mt-6">
           <button onClick={handleExport} className="w-full bg-purple-900 text-white py-4 rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-black transition-all">Exportar Backup</button>
-          <button onClick={handleImport} className="w-full bg-gray-200 text-purple-950 py-4 rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-gray-300 transition-all">Importar Backup</button>
+          <button onClick={handleImport} className="w-full bg-gray-200 dark:bg-[#20143a] text-purple-950 dark:text-purple-200 py-4 rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-gray-300 transition-all">Importar Backup</button>
         </div>
         <div className="grid grid-cols-2 gap-3 mt-4">
-          <button onClick={onViewCustomers} className="w-full bg-purple-50 text-purple-900 py-4 rounded-2xl font-black text-[10px] uppercase border border-purple-100 hover:bg-purple-100 transition-all flex items-center justify-center gap-2">
+          <button onClick={onViewCustomers} className="w-full bg-purple-50 dark:bg-purple-950/60 text-purple-900 dark:text-purple-200 py-4 rounded-2xl font-black text-[10px] uppercase border border-purple-100 dark:border-purple-800 hover:bg-purple-100 transition-all flex items-center justify-center gap-2">
             <i className="fa-solid fa-users"></i> Base de Clientes
           </button>
-          <button onClick={onViewLogs} className="w-full bg-purple-50 text-purple-900 py-4 rounded-2xl font-black text-[10px] uppercase border border-purple-100 hover:bg-purple-100 transition-all flex items-center justify-center gap-2">
+          <button onClick={onViewLogs} className="w-full bg-purple-50 dark:bg-purple-950/60 text-purple-900 dark:text-purple-200 py-4 rounded-2xl font-black text-[10px] uppercase border border-purple-100 dark:border-purple-800 hover:bg-purple-100 transition-all flex items-center justify-center gap-2">
             <i className="fa-solid fa-clipboard-list"></i> Logs do Sistema
           </button>
         </div>
       </div>
 
       {/* Card de Atualizações Automáticas & Cache */}
-      <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100">
+      <div className="bg-white dark:bg-[#160e2b] p-8 rounded-[32px] shadow-sm border border-gray-100 dark:border-purple-900/40">
         <div className="flex justify-between items-center mb-4">
           <div>
-            <h3 className="text-sm font-black text-purple-900 uppercase">Atualizações do Sistema</h3>
+            <h3 className="text-sm font-black text-purple-900 dark:text-purple-200 uppercase">Atualizações do Sistema</h3>
             <p className="text-[10px] text-gray-400 font-bold uppercase mt-0.5">Sincronização & Versões Automáticas</p>
           </div>
-          <span className="flex items-center gap-1.5 px-3 py-1 bg-green-50 border border-green-200 text-green-700 text-[9px] font-black uppercase rounded-full">
+          <span className="flex items-center gap-1.5 px-3 py-1 bg-green-50 dark:bg-green-950/60 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300 text-[9px] font-black uppercase rounded-full">
             <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
             Auto-Sync Ativo
           </span>
         </div>
 
-        <div className="bg-purple-50/50 p-4 rounded-2xl border border-purple-100 text-[11px] text-purple-900 space-y-2 mb-5">
+        <div className="bg-purple-50/50 dark:bg-purple-950/50 p-4 rounded-2xl border border-purple-100 dark:border-purple-900/40 text-[11px] text-purple-900 dark:text-purple-200 space-y-2 mb-5">
           <p className="flex items-center gap-2 font-bold">
-            <i className="fa-solid fa-cloud-arrow-down text-purple-600"></i>
+            <i className="fa-solid fa-cloud-arrow-down text-purple-600 dark:text-purple-300"></i>
             <span>O sistema verifica novas versões a cada <strong>30 segundos</strong> e sempre que você abre o aplicativo.</span>
           </p>
-          <p className="text-gray-500 text-[10px]">
+          <p className="text-gray-500 dark:text-purple-300/70 text-[10px]">
             Se uma nova versão for publicada na nuvem, o aplicativo atualiza automaticamente sem necessidade de limpar manualmente o cache do celular.
           </p>
         </div>
@@ -344,9 +363,9 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
-      <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100">
+      <div className="bg-white dark:bg-[#160e2b] p-8 rounded-[32px] shadow-sm border border-gray-100 dark:border-purple-900/40">
         <div className="flex justify-between items-center mb-6">
-          <h3 className="text-sm font-black text-purple-900 uppercase">Usuários</h3>
+          <h3 className="text-sm font-black text-purple-900 dark:text-purple-200 uppercase">Usuários</h3>
           <button 
             onClick={() => setIsAddingUser(true)}
             className="bg-purple-900 text-white px-4 py-2 rounded-xl text-[9px] font-black uppercase shadow-md"
@@ -356,14 +375,14 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
         <div className="space-y-3">
           {users.map(u => (
-            <div key={u.id} className="flex justify-between items-center p-4 bg-gray-50 rounded-2xl">
+            <div key={u.id} className="flex justify-between items-center p-4 bg-gray-50 dark:bg-[#20143a] rounded-2xl">
               <div>
-                <span className="font-black text-purple-950 text-sm uppercase">{u.usuario}</span>
-                <span className="ml-2 text-[8px] font-black bg-purple-200 text-purple-700 px-2 py-0.5 rounded-full uppercase">{u.perfil}</span>
+                <span className="font-black text-purple-950 dark:text-white text-sm uppercase">{u.usuario}</span>
+                <span className="ml-2 text-[8px] font-black bg-purple-200 dark:bg-purple-900 text-purple-700 dark:text-purple-200 px-2 py-0.5 rounded-full uppercase">{u.perfil}</span>
               </div>
               {u.usuario !== 'Tusemm' && (
                 <button 
-                  onClick={() => onRemoveUser(u.id)}
+                  onClick={() => handleDeleteUser(u)}
                   className="text-red-500 hover:text-red-700 p-2"
                 >
                   <i className="fa-solid fa-trash-can text-xs"></i>
@@ -375,14 +394,14 @@ const SettingsView: React.FC<SettingsViewProps> = ({
       </div>
 
       {isAddingUser && (
-        <div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-[40px] p-8 w-full max-w-sm shadow-2xl animate-in zoom-in-95">
-            <h3 className="text-xl font-black text-purple-950 uppercase mb-6">Novo Usuário</h3>
+        <div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setIsAddingUser(false)}>
+          <div className="bg-white dark:bg-[#160e2b] rounded-[40px] p-8 w-full max-w-sm shadow-2xl border border-purple-100 dark:border-purple-900/40 animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+            <h3 className="text-xl font-black text-purple-950 dark:text-white uppercase mb-6">Novo Usuário</h3>
             <div className="space-y-4">
-              <input type="text" placeholder="Nome Completo" className="w-full bg-gray-50 border-none rounded-2xl px-5 py-4 font-bold" value={newUser.nome} onChange={e => setNewUser({...newUser, nome: e.target.value})} />
-              <input type="text" placeholder="Usuário (Login)" className="w-full bg-gray-50 border-none rounded-2xl px-5 py-4 font-bold" value={newUser.usuario} onChange={e => setNewUser({...newUser, usuario: e.target.value})} />
-              <input type="password" placeholder="Senha" className="w-full bg-gray-50 border-none rounded-2xl px-5 py-4 font-bold" value={newUser.senha} onChange={e => setNewUser({...newUser, senha: e.target.value})} />
-              <select className="w-full bg-gray-50 border-none rounded-2xl px-5 py-4 font-bold uppercase text-xs" value={newUser.perfil} onChange={e => setNewUser({...newUser, perfil: e.target.value as UserRole})}>
+              <input type="text" placeholder="Nome Completo" className="w-full bg-gray-50 dark:bg-[#20143a] border-none rounded-2xl px-5 py-4 font-bold text-gray-900 dark:text-white outline-none" value={newUser.nome} onChange={e => setNewUser({...newUser, nome: e.target.value})} />
+              <input type="text" placeholder="Usuário (Login)" className="w-full bg-gray-50 dark:bg-[#20143a] border-none rounded-2xl px-5 py-4 font-bold text-gray-900 dark:text-white outline-none" value={newUser.usuario} onChange={e => setNewUser({...newUser, usuario: e.target.value})} />
+              <input type="password" placeholder="Senha" className="w-full bg-gray-50 dark:bg-[#20143a] border-none rounded-2xl px-5 py-4 font-bold text-gray-900 dark:text-white outline-none" value={newUser.senha} onChange={e => setNewUser({...newUser, senha: e.target.value})} />
+              <select className="w-full bg-gray-50 dark:bg-[#20143a] border-none rounded-2xl px-5 py-4 font-bold uppercase text-xs text-gray-900 dark:text-white outline-none" value={newUser.perfil} onChange={e => setNewUser({...newUser, perfil: e.target.value as UserRole})}>
                 <option value={UserRole.COMMON}>Comum (Vendedor)</option>
                 <option value={UserRole.ADMIN}>Administrador</option>
                 <option value={UserRole.KDS}>KDS (Cozinha/Entrega)</option>

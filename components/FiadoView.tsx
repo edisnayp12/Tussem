@@ -3,6 +3,8 @@ import { Sale, PaymentMethod, AppSettings, Product, SaleItem, Customer } from '.
 import { QRCodeSVG } from 'qrcode.react';
 import { generateStaticPix } from '../services/pix';
 import { normalizePhone, formatPhone, getWhatsAppLink } from '../utils/phoneUtils';
+import { copyToClipboard, formatSafeDate, formatSafeTime } from '../utils/browserUtils';
+import { useFeedback } from './FeedbackProvider';
 
 interface FiadoViewProps {
   fiados: Sale[];
@@ -38,6 +40,8 @@ const FiadoView: React.FC<FiadoViewProps> = ({
   onNavigateToPDV,
   onLogBatchDispatch
 }) => {
+  const { showToast } = useFeedback();
+
   // Aba Principal: 'pendentes' (Em Aberto) vs 'concluidos' (Vendas de Fiado Já Concluídas)
   const [activeTab, setActiveTab] = useState<'pendentes' | 'concluidos'>('pendentes');
   
@@ -70,7 +74,7 @@ const FiadoView: React.FC<FiadoViewProps> = ({
   const [aiLoadingKey, setAiLoadingKey] = useState<string | null>(null);
 
   // ==============================================================
-  // ESTADOS DO MODAL DE DISPARO DE COBRANÇA EM MASSA (TODOS DE UMA VEZ)
+  // ESTADOS DO MODAL DE DISPARO DE COBRANÇA EM MASSA E IA
   // ==============================================================
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [batchTemplateType, setBatchTemplateType] = useState<'amigavel' | 'direto' | 'detalhado' | 'custom'>('amigavel');
@@ -78,10 +82,13 @@ const FiadoView: React.FC<FiadoViewProps> = ({
   const [sentClientKeys, setSentClientKeys] = useState<Set<string>>(new Set());
   const [currentQueueIndex, setCurrentQueueIndex] = useState(0);
   const [batchTab, setBatchTab] = useState<'fila' | 'lista'>('fila');
-  const [isAutoTimerRunning, setIsAutoTimerRunning] = useState(false);
-  const [timerSecondsLeft, setTimerSecondsLeft] = useState(3);
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [showMissingPhonesList, setShowMissingPhonesList] = useState(false);
+  const [aiDraftModal, setAiDraftModal] = useState<{
+    group: FiadoGroup;
+    phone: string;
+    message: string;
+  } | null>(null);
 
   // ==============================================================
   // 1. AGRUPAMENTO DOS FIADOS PENDENTES (EM ABERTO)
@@ -280,33 +287,20 @@ const FiadoView: React.FC<FiadoViewProps> = ({
   };
 
   const getBatchWhatsAppLink = (group: FiadoGroup) => {
-    const rawDigits = group.telefone?.replace(/\D/g, '') || '';
-    let cleanPhone = rawDigits;
-    if (cleanPhone.length >= 12 && cleanPhone.startsWith('55')) {
-      cleanPhone = cleanPhone.slice(2);
-    }
     const msg = getBatchMessageText(group);
-    return `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(msg)}`;
+    return getWhatsAppLink(group.telefone, msg);
   };
 
   // Abrir Modal de Envio em Massa
   const openBatchModal = () => {
     setCurrentQueueIndex(0);
-    setIsAutoTimerRunning(false);
-    setTimerSecondsLeft(3);
     setSentClientKeys(new Set());
     setCopyFeedback(false);
     setIsBatchModalOpen(true);
   };
 
-  // Disparo de um cliente na fila e avanço
-  const handleDispatchCurrentInQueue = () => {
-    const currentDebtor = eligibleBatchDebtors[currentQueueIndex];
-    if (!currentDebtor) return;
-
-    const link = getBatchWhatsAppLink(currentDebtor);
-    window.open(link, '_blank');
-
+  // Marca o cliente atual da fila como disparado e avança para o próximo (link <a> nativo abre sem bloqueio de popup)
+  const markCurrentDispatchedAndAdvance = (currentDebtor: FiadoGroup) => {
     setSentClientKeys(prev => {
       const next = new Set(prev);
       next.add(currentDebtor.key);
@@ -315,64 +309,36 @@ const FiadoView: React.FC<FiadoViewProps> = ({
 
     if (currentQueueIndex + 1 < eligibleBatchDebtors.length) {
       setCurrentQueueIndex(c => c + 1);
-      setTimerSecondsLeft(3);
     } else {
-      setIsAutoTimerRunning(false);
+      setCurrentQueueIndex(eligibleBatchDebtors.length);
       if (onLogBatchDispatch) {
         onLogBatchDispatch(eligibleBatchDebtors.length, totalEligibleBatchDebt).catch(() => {});
       }
+      showToast('Todos os clientes da fila foram notificados!', 'success');
     }
   };
 
   const handleSkipCurrentInQueue = () => {
     if (currentQueueIndex + 1 < eligibleBatchDebtors.length) {
       setCurrentQueueIndex(c => c + 1);
-      setTimerSecondsLeft(3);
     } else {
-      setIsAutoTimerRunning(false);
+      setCurrentQueueIndex(eligibleBatchDebtors.length);
     }
   };
 
-  const handleDispatchSingleInList = (group: FiadoGroup) => {
-    const link = getBatchWhatsAppLink(group);
-    window.open(link, '_blank');
+  const markSingleSentInList = (groupKey: string) => {
     setSentClientKeys(prev => {
       const next = new Set(prev);
-      next.add(group.key);
+      next.add(groupKey);
       return next;
     });
   };
 
-  // Temporizador automático para o disparo sequencial (evita bloqueio de popup)
-  useEffect(() => {
-    let interval: any = null;
-    if (isBatchModalOpen && isAutoTimerRunning && eligibleBatchDebtors.length > 0) {
-      if (currentQueueIndex >= eligibleBatchDebtors.length) {
-        setIsAutoTimerRunning(false);
-        return;
-      }
-
-      interval = setInterval(() => {
-        setTimerSecondsLeft(prev => {
-          if (prev <= 1) {
-            handleDispatchCurrentInQueue();
-            return 3;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    } else {
-      setTimerSecondsLeft(3);
-    }
-
-    return () => clearInterval(interval);
-  }, [isBatchModalOpen, isAutoTimerRunning, currentQueueIndex, eligibleBatchDebtors]);
-
-  // Copiar todas as mensagens formatadas de uma única vez
-  const handleCopyAllBatch = () => {
+  // Copiar todas as mensagens formatadas de uma única vez (compatível com Safari iOS/macOS, Firefox, Chrome e iframes)
+  const handleCopyAllBatch = async () => {
     if (eligibleBatchDebtors.length === 0) return;
     let fullText = `*COBRANÇAS EM MASSA - CANTINA ${settings.cantinaName || 'TUSEMM'}*\n`;
-    fullText += `Data: ${new Date().toLocaleDateString('pt-BR')} | Total a receber: R$ ${totalEligibleBatchDebt.toFixed(2)}\n\n`;
+    fullText += `Data: ${formatSafeDate(new Date())} | Total a receber: R$ ${totalEligibleBatchDebt.toFixed(2)}\n\n`;
 
     eligibleBatchDebtors.forEach((d, idx) => {
       const msg = getBatchMessageText(d);
@@ -382,12 +348,14 @@ const FiadoView: React.FC<FiadoViewProps> = ({
       fullText += `Mensagem:\n${msg}\n\n`;
     });
 
-    navigator.clipboard.writeText(fullText).then(() => {
+    const ok = await copyToClipboard(fullText);
+    if (ok) {
       setCopyFeedback(true);
+      showToast('Todas as mensagens foram copiadas!', 'success');
       setTimeout(() => setCopyFeedback(false), 3000);
-    }).catch(() => {
-      alert("Não foi possível copiar automaticamente para a área de transferência.");
-    });
+    } else {
+      showToast('Não foi possível copiar automaticamente neste navegador.', 'warning');
+    }
   };
 
   // ==============================================================
@@ -495,13 +463,13 @@ const FiadoView: React.FC<FiadoViewProps> = ({
         );
         setPixQrCode(code);
       } else {
-        alert("Configure a chave PIX nas configurações!");
+        showToast("Configure a chave PIX nas configurações para receber via PIX!", 'warning');
         setPaymentMethod(PaymentMethod.CASH);
       }
     } else {
       setPixQrCode(null);
     }
-  }, [paymentMethod, selectedGroup, settings.pixChave, settings.pixTitular, settings.pixCidade]);
+  }, [paymentMethod, selectedGroup, settings.pixChave, settings.pixTitular, settings.pixCidade, showToast]);
 
   // Realizar quitação
   const handlePayment = async () => {
@@ -511,9 +479,10 @@ const FiadoView: React.FC<FiadoViewProps> = ({
       await Promise.all(
         selectedGroup.sales.map(s => onPayDebt(s.id, paymentMethod))
       );
+      showToast(`Fiado de ${selectedGroup.nome} quitado com sucesso!`, 'success');
       setSelectedGroup(null);
-    } catch (e) {
-      alert("Erro ao processar pagamento.");
+    } catch (e: any) {
+      showToast("Erro ao processar pagamento: " + (e?.message || "Tente novamente"), 'error');
     } finally {
       setIsProcessing(false);
     }
@@ -539,6 +508,7 @@ const FiadoView: React.FC<FiadoViewProps> = ({
 
       await onUpdateFiadoCustomer(saleIds, finalName, formattedPhoneToSave);
       
+      showToast("Telefone e dados salvos com sucesso!", 'success');
       setSaveSuccessMsg("Telefone e dados salvos com sucesso!");
       setTimeout(() => {
         setEditingGroup(null);
@@ -550,9 +520,9 @@ const FiadoView: React.FC<FiadoViewProps> = ({
             telefone: formattedPhoneToSave
           } : null);
         }
-      }, 700);
+      }, 650);
     } catch (err: any) {
-      alert("Erro ao atualizar telefone: " + (err.message || "Tente novamente"));
+      showToast("Erro ao atualizar telefone: " + (err?.message || "Tente novamente"), 'error');
     } finally {
       setIsSavingCustomer(false);
     }
@@ -625,16 +595,16 @@ const FiadoView: React.FC<FiadoViewProps> = ({
 
   const handleConfirmFiadoSale = async () => {
     if (quickCart.length === 0) {
-      alert("Selecione pelo menos um produto para o pedido.");
+      showToast("Selecione pelo menos um produto para o pedido.", 'warning');
       return;
     }
     const finalName = (newSaleCustomerName || selectedCustomer?.nome || '').trim();
     if (!finalName) {
-      alert("Por favor, selecione um cliente cadastrado ou informe o nome do cliente.");
+      showToast("Por favor, selecione um cliente cadastrado ou informe o nome do cliente.", 'warning');
       return;
     }
     if (!onAddFiadoSale) {
-      alert("Função de registrar venda não disponível.");
+      showToast("Função de registrar venda não disponível.", 'error');
       return;
     }
 
@@ -654,9 +624,9 @@ const FiadoView: React.FC<FiadoViewProps> = ({
       setIsAddSaleOpen(false);
       setSelectedCustomer(null);
       setQuickCart([]);
-      alert(`Novo pedido de R$ ${quickCartTotal.toFixed(2)} incluído no fiado de ${finalName} com sucesso!`);
+      showToast(`Novo pedido de R$ ${quickCartTotal.toFixed(2)} incluído no fiado de ${finalName}!`, 'success');
     } catch (e: any) {
-      alert("Erro ao adicionar pedido no fiado: " + (e.message || "Tente novamente"));
+      showToast("Erro ao adicionar pedido no fiado: " + (e?.message || "Tente novamente"), 'error');
     } finally {
       setIsSubmittingSale(false);
     }
@@ -664,23 +634,17 @@ const FiadoView: React.FC<FiadoViewProps> = ({
 
   // WhatsApp para Cobrança Individual
   const generateWhatsAppLink = (group: FiadoGroup) => {
-    const rawDigits = group.telefone?.replace(/\D/g, '') || '';
-    if (!rawDigits) return '#';
-    
-    let cleanPhone = rawDigits;
-    if (cleanPhone.length >= 12 && cleanPhone.startsWith('55')) {
-      cleanPhone = cleanPhone.slice(2);
-    }
-    
+    const cleanPhone = normalizePhone(group.telefone);
+    if (!cleanPhone) return '#';
+
     const total = group.total.toFixed(2).replace('.', ',');
-    
+
     let detalhesText = '';
     group.sales.forEach(sale => {
-      const dateObj = new Date(sale.created_at);
-      const dataStr = dateObj.toLocaleDateString('pt-BR');
-      const horaStr = dateObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      const dataStr = formatSafeDate(sale.created_at);
+      const horaStr = formatSafeTime(sale.created_at);
       const tipoLabel = sale.tipo_pedido === 'reserva' ? ' [Reserva]' : ' [Balcão PDV]';
-      
+
       detalhesText += `\n🗓 *${dataStr} às ${horaStr}*${tipoLabel}\n`;
       sale.itens?.forEach(item => {
         detalhesText += `- ${item.quantidade}x ${item.nome}\n`;
@@ -697,33 +661,31 @@ const FiadoView: React.FC<FiadoViewProps> = ({
     }
 
     const message = `Olá ${group.nome}! Aqui é da Cantina ${settings.cantinaName || 'TUSEMM'}.\n\nVocê possui um total de R$ ${total} pendente em fiados.\n\n*Detalhes das compras:*${detalhesText}${pixInfo}\n\nPor favor, realize o pagamento para darmos baixa no sistema. Muito obrigado!`;
-    
-    return `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
+
+    return getWhatsAppLink(cleanPhone, message);
   };
 
   // WhatsApp de Comprovante de Quitação
   const generateConcludedReceiptWhatsAppLink = (group: FiadoGroup) => {
-    const rawDigits = group.telefone?.replace(/\D/g, '') || '';
-    if (!rawDigits) return '#';
-
-    let cleanPhone = rawDigits;
-    if (cleanPhone.length >= 12 && cleanPhone.startsWith('55')) {
-      cleanPhone = cleanPhone.slice(2);
-    }
+    const cleanPhone = normalizePhone(group.telefone);
+    if (!cleanPhone) return '#';
 
     const total = group.total.toFixed(2).replace('.', ',');
     const lastSale = group.sales[0];
-    const dataPagamento = lastSale ? new Date(lastSale.created_at).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR');
+    const dataPagamento = lastSale ? formatSafeDate(lastSale.created_at) : formatSafeDate(new Date());
 
     const message = `Olá ${group.nome}! Confirmamos o recebimento e quitação do seu fiado na Cantina ${settings.cantinaName || 'TUSEMM'} no valor total de R$ ${total} em ${dataPagamento}.\n\nSua conta está em dia! Agradecemos pela preferência e confiança. Axé! 🙏`;
 
-    return `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(message)}`;
+    return getWhatsAppLink(cleanPhone, message);
   };
 
   const handleAICobrar = async (group: FiadoGroup) => {
-    const rawDigits = group.telefone?.replace(/\D/g, '') || '';
-    if (!rawDigits) return alert("Adicione um número de telefone ao cliente primeiro para enviar a cobrança.");
-    
+    const cleanPhone = normalizePhone(group.telefone);
+    if (!cleanPhone) {
+      showToast("Adicione um número de telefone ao cliente primeiro para enviar a cobrança.", 'warning');
+      return;
+    }
+
     setAiLoadingKey(group.key);
     try {
       const oldestSale = Math.min(...group.sales.map(s => new Date(s.created_at).getTime()));
@@ -742,14 +704,15 @@ const FiadoView: React.FC<FiadoViewProps> = ({
         })
       });
       const data = await res.json();
-      let cleanPhone = rawDigits;
-      if (cleanPhone.length >= 12 && cleanPhone.startsWith('55')) {
-        cleanPhone = cleanPhone.slice(2);
-      }
-      const msg = data.message || `Olá, ${group.nome}! Passando para lembrar da sua conta na Cantina TUSEMM no valor de R$ ${group.total.toFixed(2)}. Chave PIX: ${settings.pixChave || ''}. Axé! 🙏`;
-      window.open(`https://wa.me/55${cleanPhone}?text=${encodeURIComponent(msg)}`, '_blank');
+      const msg = data.message || `Olá, ${group.nome}! Passando para lembrar da sua conta na Cantina ${settings.cantinaName || 'TUSEMM'} no valor de R$ ${group.total.toFixed(2)}. Chave PIX: ${settings.pixChave || 'no caixa'}. Axé! 🙏`;
+      // Abre modal de pré-visualização com link direto <a> (nunca bloqueado por popup blockers no Safari/iOS/Firefox/Chrome)
+      setAiDraftModal({
+        group,
+        phone: cleanPhone,
+        message: msg
+      });
     } catch (e: any) {
-      alert("Erro ao gerar mensagem de IA: " + e.message);
+      showToast("Erro ao gerar mensagem de IA: " + (e?.message || "Verifique sua conexão"), 'error');
     } finally {
       setAiLoadingKey(null);
     }
@@ -1442,16 +1405,18 @@ const FiadoView: React.FC<FiadoViewProps> = ({
                             </div>
                           </div>
 
-                          {/* Ações da Fila */}
+                          {/* Ações da Fila com link nativo <a> compatível com Safari/iOS/Firefox/Chrome */}
                           <div className="pt-2 flex flex-col sm:flex-row gap-2">
-                            <button
-                              type="button"
-                              onClick={handleDispatchCurrentInQueue}
-                              className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-wider shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all"
+                            <a
+                              href={getBatchWhatsAppLink(current)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={() => markCurrentDispatchedAndAdvance(current)}
+                              className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-4 px-4 rounded-2xl font-black text-xs uppercase tracking-wider shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all text-center"
                             >
                               <i className="fa-brands fa-whatsapp text-base"></i>
                               <span>Abrir WhatsApp de {current.nome} e Avançar</span>
-                            </button>
+                            </a>
 
                             <button
                               type="button"
@@ -1462,24 +1427,10 @@ const FiadoView: React.FC<FiadoViewProps> = ({
                             </button>
                           </div>
 
-                          {/* Temporizador Automático Opcional */}
-                          <div className="flex items-center justify-between pt-2 border-t border-purple-200/60 dark:border-purple-900/40">
-                            <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-purple-900 dark:text-purple-200">
-                              <input
-                                type="checkbox"
-                                checked={isAutoTimerRunning}
-                                onChange={e => setIsAutoTimerRunning(e.target.checked)}
-                                className="w-4 h-4 text-purple-600 rounded"
-                              />
-                              <span>Avanço automático contínuo (abre WhatsApp a cada 3s)</span>
-                            </label>
-
-                            {isAutoTimerRunning && (
-                              <span className="text-xs font-black text-amber-600 dark:text-amber-400 animate-pulse">
-                                Disparando em {timerSecondsLeft}s...
-                              </span>
-                            )}
-                          </div>
+                          <p className="text-[10px] font-bold text-gray-500 dark:text-purple-300/80 pt-2 border-t border-purple-200/60 dark:border-purple-900/40 flex items-center gap-2">
+                            <i className="fa-solid fa-shield-check text-emerald-600"></i>
+                            <span>Cada clique abre diretamente no WhatsApp sem bloqueio de pop-up em nenhum navegador e avança automaticamente para o próximo cliente.</span>
+                          </p>
                         </div>
                       );
                     })()
@@ -1548,21 +1499,25 @@ const FiadoView: React.FC<FiadoViewProps> = ({
 
                           <div>
                             {isSent ? (
-                              <button
-                                type="button"
-                                onClick={() => handleDispatchSingleInList(group)}
-                                className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-1.5"
+                              <a
+                                href={getBatchWhatsAppLink(group)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={() => markSingleSentInList(group.key)}
+                                className="bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase inline-flex items-center gap-1.5"
                               >
                                 <i className="fa-solid fa-check"></i> Reenviar
-                              </button>
+                              </a>
                             ) : (
-                              <button
-                                type="button"
-                                onClick={() => handleDispatchSingleInList(group)}
-                                className="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-1.5 shadow-sm active:scale-95"
+                              <a
+                                href={getBatchWhatsAppLink(group)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={() => markSingleSentInList(group.key)}
+                                className="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-1.5 rounded-xl text-[10px] font-black uppercase inline-flex items-center gap-1.5 shadow-sm active:scale-95"
                               >
                                 <i className="fa-brands fa-whatsapp text-xs"></i> Enviar
-                              </button>
+                              </a>
                             )}
                           </div>
                         </div>
@@ -2254,6 +2209,78 @@ const FiadoView: React.FC<FiadoViewProps> = ({
             >
               Cancelar
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL 4: PRÉ-VISUALIZAÇÃO DA COBRANÇA GERADA PELA IA           */}
+      {/* ============================================================== */}
+      {aiDraftModal && (
+        <div
+          className="fixed inset-0 bg-black/80 z-[135] flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto animate-in fade-in"
+          onClick={() => setAiDraftModal(null)}
+        >
+          <div
+            className="bg-white dark:bg-[#160e2b] rounded-[36px] p-6 sm:p-8 w-full max-w-md shadow-2xl my-auto border border-purple-200 dark:border-purple-900/50 animate-in zoom-in-95"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-200 flex items-center justify-center text-lg">
+                  <i className="fa-solid fa-wand-magic-sparkles"></i>
+                </div>
+                <div>
+                  <h3 className="text-lg font-black uppercase text-purple-950 dark:text-white leading-tight">
+                    Cobrança com IA
+                  </h3>
+                  <p className="text-[10px] font-bold uppercase text-gray-400">
+                    Para {aiDraftModal.group.nome} • R$ {aiDraftModal.group.total.toFixed(2)}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAiDraftModal(null)}
+                className="w-8 h-8 rounded-full bg-gray-100 dark:bg-purple-950 text-gray-500 hover:text-gray-800 dark:text-purple-300 flex items-center justify-center"
+              >
+                <i className="fa-solid fa-xmark text-xs"></i>
+              </button>
+            </div>
+
+            <label className="text-[10px] font-black uppercase text-purple-900 dark:text-purple-300 tracking-wider block mb-1.5">
+              Edite se quiser antes de enviar:
+            </label>
+            <textarea
+              rows={6}
+              value={aiDraftModal.message}
+              onChange={e => setAiDraftModal(prev => prev ? { ...prev, message: e.target.value } : null)}
+              className="w-full bg-gray-50 dark:bg-[#20143a] border border-gray-200 dark:border-purple-900 rounded-2xl p-4 text-xs font-semibold text-gray-800 dark:text-white outline-none focus:border-purple-600 leading-relaxed"
+            />
+
+            <div className="mt-5 flex flex-col sm:flex-row gap-2.5">
+              <button
+                type="button"
+                onClick={async () => {
+                  const ok = await copyToClipboard(aiDraftModal.message);
+                  showToast(ok ? 'Mensagem copiada!' : 'Não foi possível copiar.', ok ? 'success' : 'warning');
+                }}
+                className="sm:w-36 py-3.5 px-4 rounded-2xl bg-purple-50 dark:bg-purple-950 text-purple-900 dark:text-purple-200 border border-purple-200 dark:border-purple-800 font-black text-xs uppercase flex items-center justify-center gap-2 hover:bg-purple-100 transition-all"
+              >
+                <i className="fa-regular fa-copy"></i>
+                Copiar
+              </button>
+              <a
+                href={getWhatsAppLink(aiDraftModal.phone, aiDraftModal.message)}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setAiDraftModal(null)}
+                className="flex-1 py-3.5 px-5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase shadow-lg flex items-center justify-center gap-2 transition-all active:scale-95"
+              >
+                <i className="fa-brands fa-whatsapp text-base"></i>
+                Enviar no WhatsApp
+              </a>
+            </div>
           </div>
         </div>
       )}

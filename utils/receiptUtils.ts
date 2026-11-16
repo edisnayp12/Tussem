@@ -1,15 +1,17 @@
 import { Sale, SaleItem, AppSettings } from '../types';
 import { normalizePhone } from './phoneUtils';
+import { formatSafeDateTime } from './browserUtils';
+
+const escapeHtml = (str: string): string =>
+  str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 
 export const formatSaleReceiptText = (sale: Sale, settings: AppSettings): string => {
   const cantinaName = settings.cantinaName || 'Cantina TUSEMM';
-  const saleDate = new Date(sale.created_at).toLocaleString('pt-BR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
+  const saleDate = formatSafeDateTime(sale.created_at);
 
   const formaMap: Record<string, string> = {
     pix: 'PIX',
@@ -73,30 +75,67 @@ export const getSaleWhatsAppReceiptLink = (sale: Sale, settings: AppSettings, cu
   return `https://wa.me/?text=${encoded}`;
 };
 
+/**
+ * Imprime recibo térmico usando Iframe oculto (funciona sem popups em Chrome, Safari, Firefox, Edge e Iframes)
+ */
 export const printSaleThermalReceipt = (sale: Sale, settings: AppSettings): void => {
-  const text = formatSaleReceiptText(sale, settings).replace(/\*/g, '');
-  const printWindow = window.open('', '_blank', 'width=350,height=500');
-  if (printWindow) {
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>Comprovante - ${settings.cantinaName || 'TUSEMM'}</title>
-          <style>
-            body { font-family: 'Courier New', monospace; font-size: 12px; margin: 10px; line-height: 1.4; color: #000; }
-            pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
-            @media print {
-              body { margin: 0; }
-            }
-          </style>
-        </head>
-        <body>
-          <pre>${text}</pre>
-          <script>
-            window.onload = function() { window.print(); window.close(); }
-          </script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
-  }
+  const rawText = formatSaleReceiptText(sale, settings).replace(/\*/g, '');
+  const safeHtmlText = escapeHtml(rawText);
+  const safeTitle = escapeHtml(settings.cantinaName || 'TUSEMM');
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+      <head>
+        <meta charset="UTF-8" />
+        <title>Comprovante - ${safeTitle}</title>
+        <style>
+          body { font-family: 'Courier New', Courier, monospace; font-size: 12px; margin: 12px; line-height: 1.4; color: #000; background: #fff; }
+          pre { white-space: pre-wrap; word-break: break-word; font-family: inherit; margin: 0; }
+          @media print {
+            body { margin: 0; }
+          }
+        </style>
+      </head>
+      <body>
+        <pre>${safeHtmlText}</pre>
+      </body>
+    </html>
+  `;
+
+  try {
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(iframe);
+
+    const frameDoc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (frameDoc) {
+      frameDoc.open();
+      frameDoc.write(html);
+      frameDoc.close();
+
+      setTimeout(() => {
+        try {
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+        } catch {
+          window.print();
+        }
+        setTimeout(() => {
+          try {
+            if (iframe.parentNode) document.body.removeChild(iframe);
+          } catch {}
+        }, 2000);
+      }, 250);
+      return;
+    }
+  } catch {}
+
+  window.print();
 };

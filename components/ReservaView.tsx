@@ -218,10 +218,10 @@ const ReservaView: React.FC<ReservaViewProps> = ({ products, settings, onReserve
   const cantinaLetter = (settings.cantinaName || 'C')[0].toUpperCase();
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-[#0d081a] text-gray-900 dark:text-gray-100 flex flex-col md:flex-row transition-colors duration-200">
+    <div className="min-h-[100dvh] bg-gray-50 dark:bg-[#0d081a] text-gray-900 dark:text-gray-100 flex flex-col md:flex-row transition-colors duration-200">
       
       {/* Coluna Principal: Vitrine de Produtos */}
-      <div className="flex-1 p-4 sm:p-6 md:p-8 flex flex-col min-h-screen md:h-screen md:overflow-hidden">
+      <div className="flex-1 p-4 sm:p-6 md:p-8 flex flex-col min-h-[100dvh] md:h-[100dvh] md:overflow-hidden">
         
         {/* Top Header */}
         <header className="mb-4 sm:mb-6 flex justify-between items-center gap-3 bg-white dark:bg-[#160e2b] p-4 rounded-3xl border border-gray-100 dark:border-purple-900/40 shadow-sm">
@@ -383,10 +383,10 @@ const ReservaView: React.FC<ReservaViewProps> = ({ products, settings, onReserve
 
       {/* Painel / Gaveta de Finalização da Reserva (Mobile Drawer & Desktop Sidebar) */}
       <div className={`fixed inset-0 z-50 bg-black/70 backdrop-blur-sm transition-opacity duration-300 ${
-        isFinishing ? 'opacity-100 visible' : 'opacity-0 invisible'
-      } md:relative md:opacity-100 md:visible md:w-[400px] md:bg-white md:dark:bg-[#160e2b] md:border-l md:border-gray-100 md:dark:border-purple-900/40 md:shadow-2xl flex flex-col h-screen`}>
+        isFinishing ? 'opacity-100 visible' : 'opacity-0 invisible pointer-events-none md:pointer-events-auto'
+      } md:relative md:opacity-100 md:visible md:w-[400px] md:bg-white md:dark:bg-[#160e2b] md:border-l md:border-gray-100 md:dark:border-purple-900/40 md:shadow-2xl flex flex-col h-[100dvh]`}>
         
-        <div className={`absolute bottom-0 w-full max-h-[90vh] bg-white dark:bg-[#160e2b] text-gray-900 dark:text-white rounded-t-[36px] p-6 flex flex-col md:relative md:max-h-full md:h-full md:rounded-none md:p-8 transition-transform duration-300 ${
+        <div className={`absolute bottom-0 w-full max-h-[90dvh] bg-white dark:bg-[#160e2b] text-gray-900 dark:text-white rounded-t-[36px] p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))] flex flex-col md:relative md:max-h-full md:h-full md:rounded-none md:p-8 transition-transform duration-300 ${
           isFinishing ? 'translate-y-0' : 'translate-y-full md:translate-y-0'
         }`}>
           
@@ -498,6 +498,10 @@ const ReservaView: React.FC<ReservaViewProps> = ({ products, settings, onReserve
                   placeholder="(DDD) 99999-9999" 
                   value={customerPhone} 
                   onChange={e => handlePhoneChange(e.target.value)} 
+                  onBlur={() => {
+                    const clean = normalizePhone(customerPhone);
+                    if (clean) setCustomerPhone(formatPhone(clean));
+                  }}
                   className="w-full bg-gray-50 dark:bg-purple-950/40 border border-gray-200 dark:border-purple-900/60 focus:border-purple-500 rounded-2xl px-4 py-3 font-bold text-xs text-gray-900 dark:text-white placeholder-gray-400 outline-none transition-all" 
                 />
               </div>
@@ -586,7 +590,10 @@ const ReservaView: React.FC<ReservaViewProps> = ({ products, settings, onReserve
 
       {/* Barra Flutuante Mobile para Ver Carrinho */}
       {!isFinishing && cart.length > 0 && (
-        <div className="md:hidden fixed bottom-4 left-4 right-4 z-40 animate-in slide-in-from-bottom-6">
+        <div
+          className="md:hidden fixed bottom-4 left-4 right-4 z-40 animate-in slide-in-from-bottom-6"
+          style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+        >
           <button 
             type="button"
             onClick={() => setIsFinishing(true)}

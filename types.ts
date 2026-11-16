@@ -67,6 +67,7 @@ export interface SaleItem {
   nome?: string; // Virtual para UI
   quantidade: number;
   preco_unitario: number;
+  preco_custo?: number;
   subtotal: number;
 }
 
