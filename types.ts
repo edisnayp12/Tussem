@@ -29,6 +29,7 @@ export interface User {
   usuario: string;
   email?: string;
   senha?: string;
+  pin?: string;
   perfil: UserRole;
   ativo: boolean;
   created_at?: string;
@@ -76,8 +77,11 @@ export interface Sale {
   id: string;
   cliente_id?: string;
   usuario_id?: string;
+  operador_nome?: string;
   status: 'pago' | 'pendente' | 'cancelado';
   valor_total: number;
+  valor_recebido?: number;
+  troco?: number;
   forma_pagamento: PaymentMethod;
   pago_com?: PaymentMethod;
   created_at: string;

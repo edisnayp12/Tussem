@@ -1,4 +1,5 @@
-import { Product, Sale, StockMovement, User, AppSettings } from '../types';
+import { Product, Sale, SaleItem, StockMovement, User, AppSettings } from '../types';
+import { INITIAL_PRODUCTS } from '../constants';
 import { safeStorage } from '../utils/safeStorage';
 import { downloadBlobFile, getLocalDateString } from '../utils/browserUtils';
 
@@ -7,7 +8,8 @@ const STORAGE_KEYS = {
   SALES: 'tusemm_sales',
   STOCK_HISTORY: 'tusemm_stock_history',
   USERS: 'tusemm_users',
-  SETTINGS: 'tusemm_settings'
+  SETTINGS: 'tusemm_settings',
+  DEMO_SEEDED: 'tusemm_demo_seeded_v1'
 };
 
 function safeParseJson<T>(raw: string | null, fallback: T): T {
@@ -19,12 +21,80 @@ function safeParseJson<T>(raw: string | null, fallback: T): T {
   }
 }
 
+function cloneInitialProducts(): Product[] {
+  const nowIso = new Date().toISOString();
+  return INITIAL_PRODUCTS.map((p) => ({
+    ...p,
+    created_at: p.created_at || nowIso
+  }));
+}
+
 export const storageService = {
+  initializeDemoDataIfNeeded: (): { products: Product[]; sales: Sale[] } => {
+    const alreadySeeded = safeStorage.getItem(STORAGE_KEYS.DEMO_SEEDED) === '1';
+    const existingProducts = safeParseJson<Product[]>(safeStorage.getItem(STORAGE_KEYS.PRODUCTS), []);
+    const existingSales = safeParseJson<Sale[]>(safeStorage.getItem(STORAGE_KEYS.SALES), []);
+
+    if (!alreadySeeded && existingProducts.length === 0) {
+      const seededProducts = cloneInitialProducts();
+      safeStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(seededProducts));
+      if (!safeStorage.getItem(STORAGE_KEYS.SALES)) {
+        safeStorage.setItem(STORAGE_KEYS.SALES, JSON.stringify([]));
+      }
+      safeStorage.setItem(STORAGE_KEYS.DEMO_SEEDED, '1');
+      return { products: seededProducts, sales: existingSales };
+    }
+
+    if (!alreadySeeded) {
+      safeStorage.setItem(STORAGE_KEYS.DEMO_SEEDED, '1');
+    }
+
+    return {
+      products: existingProducts.length > 0 ? existingProducts : cloneInitialProducts(),
+      sales: existingSales
+    };
+  },
+
+  resetDemoData: (): { products: Product[]; sales: Sale[] } => {
+    const freshProducts = cloneInitialProducts();
+    safeStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(freshProducts));
+    safeStorage.setItem(STORAGE_KEYS.SALES, JSON.stringify([]));
+    safeStorage.setItem(STORAGE_KEYS.STOCK_HISTORY, JSON.stringify([]));
+    safeStorage.setItem(STORAGE_KEYS.DEMO_SEEDED, '1');
+    return { products: freshProducts, sales: [] };
+  },
+
+  applySaleToLocal: (sale: Sale, items: SaleItem[]): { products: Product[]; sales: Sale[] } => {
+    const currentProducts = storageService.getProducts();
+    const baseProducts = currentProducts.length > 0 ? currentProducts : cloneInitialProducts();
+
+    const updatedProducts = baseProducts.map((prod) => {
+      const soldItem = items.find((it) => it.produto_id === prod.id);
+      if (!soldItem) return prod;
+      const nextStock = Math.max(0, (Number(prod.estoque) || 0) - (Number(soldItem.quantidade) || 1));
+      return { ...prod, estoque: nextStock };
+    });
+
+    const currentSales = storageService.getSales();
+    const updatedSales = [sale, ...currentSales.filter((s) => s.id !== sale.id)];
+
+    storageService.saveProducts(updatedProducts);
+    storageService.saveSales(updatedSales);
+    safeStorage.setItem(STORAGE_KEYS.DEMO_SEEDED, '1');
+
+    return { products: updatedProducts, sales: updatedSales };
+  },
+
   getProducts: (): Product[] => {
-    return safeParseJson<Product[]>(safeStorage.getItem(STORAGE_KEYS.PRODUCTS), []);
+    const list = safeParseJson<Product[]>(safeStorage.getItem(STORAGE_KEYS.PRODUCTS), []);
+    if (list.length === 0 && safeStorage.getItem(STORAGE_KEYS.DEMO_SEEDED) !== '1') {
+      return storageService.initializeDemoDataIfNeeded().products;
+    }
+    return list;
   },
   saveProducts: (products: Product[]) => {
     safeStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
+    safeStorage.setItem(STORAGE_KEYS.DEMO_SEEDED, '1');
   },
   getSales: (): Sale[] => {
     return safeParseJson<Sale[]>(safeStorage.getItem(STORAGE_KEYS.SALES), []);
@@ -45,7 +115,7 @@ export const storageService = {
     safeStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   },
   getSettings: (): AppSettings => {
-    return safeParseJson<AppSettings>(safeStorage.getItem(STORAGE_KEYS.SETTINGS), { cantinaName: 'TUSEMM' });
+    return safeParseJson<AppSettings>(safeStorage.getItem(STORAGE_KEYS.SETTINGS), { cantinaName: 'TUSEMM - Maria Mulambo' });
   },
   saveSettings: (settings: AppSettings) => {
     safeStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));

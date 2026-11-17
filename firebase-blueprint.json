@@ -7,7 +7,8 @@
       "properties": {
         "nome": { "type": "string" },
         "usuario": { "type": "string" },
-        "perfil": { "type": "string", "enum": ["admin", "comum"] },
+        "pin": { "type": "string" },
+        "perfil": { "type": "string", "enum": ["admin", "comum", "kds"] },
         "ativo": { "type": "boolean" },
         "created_at": { "type": "string" }
       },
@@ -35,8 +36,11 @@
       "type": "object",
       "properties": {
         "usuario_id": { "type": "string" },
+        "operador_nome": { "type": "string" },
         "status": { "type": "string", "enum": ["pago", "pendente", "cancelado"] },
         "valor_total": { "type": "number" },
+        "valor_recebido": { "type": "number" },
+        "troco": { "type": "number" },
         "forma_pagamento": { "type": "string" },
         "created_at": { "type": "string" },
         "cliente_nome": { "type": "string" },

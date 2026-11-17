@@ -14,7 +14,9 @@ import ReservaView from './components/ReservaView';
 import KdsView from './components/KdsView';
 import CashRegisterView from './components/CashRegisterView';
 import AIAssistantModal from './components/AIAssistantModal';
+import LoginScreen from './components/LoginScreen';
 import { safeStorage } from './utils/safeStorage';
+import { storageService } from './services/storageService';
 import { FeedbackProvider, useFeedback } from './components/FeedbackProvider';
 import { 
   initAutoUpdateWatcher, 
@@ -65,13 +67,22 @@ const getInitialTheme = (): 'light' | 'dark' => {
   }
 };
 
+const computePendingFiados = (allSales: Sale[]): Sale[] =>
+  allSales.filter(
+    (sale) =>
+      sale.status === 'pendente' &&
+      ((sale.tipo_pedido === 'reserva' && sale.status_entrega === 'entregue') ||
+        (sale.tipo_pedido !== 'reserva' && sale.forma_pagamento === PaymentMethod.FIADO))
+  );
+
 const AppContent: React.FC = () => {
-  const { showToast } = useFeedback();
+  const { showToast, confirmAction } = useFeedback();
+  const initialDemo = React.useMemo(() => storageService.initializeDemoDataIfNeeded(), []);
   const [currentUser, setCurrentUser] = useState<User | null>(getInitialUser);
-  const [activeTab, setActiveTab] = useState('home');
-  const [products, setProducts] = useState<Product[]>([]);
-  const [sales, setSales] = useState<Sale[]>([]);
-  const [fiados, setFiados] = useState<Sale[]>([]);
+  const [activeTab, setActiveTab] = useState<string>('venda');
+  const [products, setProducts] = useState<Product[]>(initialDemo.products);
+  const [sales, setSales] = useState<Sale[]>(initialDemo.sales);
+  const [fiados, setFiados] = useState<Sale[]>(() => computePendingFiados(initialDemo.sales));
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [shifts, setShifts] = useState<CashShift[]>([]);
   const [users, setUsers] = useState<User[]>([]);
@@ -84,8 +95,6 @@ const AppContent: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [dbStatus, setDbStatus] = useState<'healthy' | 'warning' | 'error' | 'syncing'>('healthy');
   const [lastSync, setLastSync] = useState(new Date());
-  const [loginData, setLoginData] = useState({ user: '', pass: '' });
-  const [loginError, setLoginError] = useState<string | null>(null);
   const [inactivityNotice, setInactivityNotice] = useState(false);
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
@@ -267,17 +276,31 @@ const AppContent: React.FC = () => {
         await db.ensureAuthReady();
         clearTimeout(safetyTimer);
         
-        unsubProducts = db.subscribeToProducts((p) => { setProducts(p); setLastSync(new Date()); }, handleError);
-        unsubSales = db.subscribeToSales((s) => { 
-          setSales(s); 
-          setFiados(s.filter(sale => 
-            sale.status === 'pendente' && 
-            (
-              (sale.tipo_pedido === 'reserva' && sale.status_entrega === 'entregue') ||
-              (sale.tipo_pedido !== 'reserva' && sale.forma_pagamento === PaymentMethod.FIADO)
-            )
-          ));
-          setLastSync(new Date()); 
+        unsubProducts = db.subscribeToProducts((p) => {
+          if (p.length > 0) {
+            setProducts(p);
+            storageService.saveProducts(p);
+          } else {
+            const localProds = storageService.initializeDemoDataIfNeeded().products;
+            setProducts(localProds);
+            if (localProds.length > 0) {
+              db.seedDemoProducts(localProds).catch(() => {});
+            }
+          }
+          setLastSync(new Date());
+        }, handleError);
+        unsubSales = db.subscribeToSales((s) => {
+          const localSales = storageService.getSales();
+          const cloudIds = new Set(s.map((item) => item.id));
+          const merged = [
+            ...s,
+            ...localSales.filter((ls) => ls.id.startsWith('LOCAL-') && !cloudIds.has(ls.id))
+          ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+          setSales(merged);
+          setFiados(computePendingFiados(merged));
+          storageService.saveSales(merged);
+          setLastSync(new Date());
         }, handleError);
         unsubCustomers = db.subscribeToCustomers((c) => { setCustomers(c); setLastSync(new Date()); }, handleError);
         unsubShifts = db.subscribeToCashShifts((sh) => { setShifts(sh); setLastSync(new Date()); }, handleError);
@@ -324,62 +347,108 @@ const AppContent: React.FC = () => {
     setCurrentUser(user);
   };
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoginError(null);
+  const handleLoginSuccess = (user: User, methodLabel: string) => {
     setInactivityNotice(false);
-    
-    const userLower = loginData.user.trim().toLowerCase();
+    saveUserSession(user);
+    db.logAction(
+      user.nome || user.usuario,
+      user.id,
+      'Login no Sistema',
+      `Operador ${user.nome || user.usuario} entrou via ${methodLabel} (${user.perfil.toUpperCase()})`
+    ).catch(() => {});
 
-    // Login como Super Admin
-    if (userLower === 'tusemmaxe@gmail.com' || userLower === 'tusemmaxe') {
-      try {
-        await db.loginAsSuperAdmin('tusemmaxe@gmail.com', loginData.pass);
-        const adminUser: User = { id: 'super-admin', nome: 'Dono TUSEMM', usuario: 'tusemmaxe', perfil: UserRole.ADMIN, ativo: true };
-        saveUserSession(adminUser);
-        db.logAction('Dono TUSEMM', 'super-admin', 'Login Super Admin', 'Acesso autenticado com e-mail master').catch(() => {});
-        return;
-      } catch (e: any) {
-        setLoginError(e.message || 'Erro ao autenticar administrador');
-        return;
-      }
-    }
-
-    const typedUser = loginData.user.trim();
-    const foundUser = users.find(u => u.usuario.trim() === typedUser && u.ativo);
-    
-    if (foundUser && foundUser.senha === loginData.pass) {
-      saveUserSession(foundUser);
-      db.logAction(foundUser.nome, foundUser.id, 'Login no Sistema', `Usuário ${foundUser.nome} logou com perfil ${foundUser.perfil.toUpperCase()}`).catch(() => {});
-      if (foundUser.perfil === UserRole.KDS) {
-        setActiveTab('kds');
-      }
-    } else if (typedUser === 'Tusemm' && loginData.pass === 'Tusemm@7') {
-      const masterUser: User = { id: '0', nome: 'Master Admin', usuario: 'Tusemm', perfil: UserRole.ADMIN, ativo: true };
-      saveUserSession(masterUser);
-      db.logAction('Master Admin', '0', 'Login Master', 'Acesso com usuário mestre Tusemm').catch(() => {});
+    if (user.perfil === UserRole.KDS) {
+      setActiveTab('kds');
     } else {
-      setLoginError('Credenciais inválidas ou usuário inativo.');
+      setActiveTab('venda');
     }
+  };
+
+  const handleSuperAdminLogin = async (email: string, pass: string) => {
+    await db.loginAsSuperAdmin(email, pass);
+    const adminUser: User = {
+      id: 'super-admin',
+      nome: 'Dono TUSEMM',
+      usuario: 'tusemmaxe',
+      perfil: UserRole.ADMIN,
+      ativo: true
+    };
+    handleLoginSuccess(adminUser, 'E-mail Master');
   };
 
   const handleCompleteSale = async (data: any): Promise<Sale | void> => {
     const isReserva = isCurrentRouteReserva();
     if (!currentUser && !isReserva) return;
+
+    const saleItems: any[] = (data.items || []).map((i: any) => ({
+      produto_id: i.produto_id,
+      nome: i.nome || '',
+      preco_unitario: Number(i.preco_unitario) || 0,
+      quantidade: Number(i.quantidade) || 1,
+      subtotal: Number(i.subtotal) || 0
+    }));
+
+    const localSaleId = `LOCAL-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const nowIso = new Date().toISOString();
+    const localSaleRecord: Sale = {
+      id: localSaleId,
+      usuario_id: currentUser?.id,
+      operador_nome: currentUser?.nome || currentUser?.usuario || (isReserva ? 'Reserva Online' : 'Operador'),
+      forma_pagamento: data.paymentMethod,
+      valor_total: Number(data.total) || 0,
+      valor_recebido: data.valor_recebido,
+      troco: data.troco,
+      status: data.paymentMethod === PaymentMethod.FIADO || data.tipo_pedido === 'reserva' ? 'pendente' : 'pago',
+      cliente_nome: data.customerName?.trim() || 'Balcão',
+      telefone_comprador: data.telefone_comprador,
+      created_at: nowIso,
+      itens: saleItems,
+      tipo_pedido: data.tipo_pedido || 'balcao',
+      status_entrega: data.tipo_pedido === 'reserva' ? 'pendente' : 'entregue'
+    };
+
     try {
-      const saleItems = data.items.map((i: any) => ({
-        produto_id: i.produto_id,
-        nome: i.nome || '',
-        preco_unitario: Number(i.preco_unitario) || 0,
-        quantidade: Number(i.quantidade) || 1,
-        subtotal: Number(i.subtotal) || 0
-      }));
-      const savedSale = await db.createSale(data, saleItems, currentUser?.id || null, currentUser?.nome);
+      const savedSale = await db.createSale(
+        { ...data, created_at: nowIso },
+        saleItems,
+        currentUser?.id || null,
+        currentUser?.nome || currentUser?.usuario
+      );
+      const localAfter = storageService.applySaleToLocal(savedSale, saleItems);
+      setProducts(localAfter.products);
+      setSales(localAfter.sales);
+      setFiados(computePendingFiados(localAfter.sales));
       return savedSale;
     } catch (e: any) {
-      showToast('Erro ao registrar venda: ' + (e?.message || 'Erro inesperado'), 'error');
-      throw e;
+      console.warn('Persistência offline/local aplicada para venda:', e?.message);
+      const localAfter = storageService.applySaleToLocal(localSaleRecord, saleItems);
+      setProducts(localAfter.products);
+      setSales(localAfter.sales);
+      setFiados(computePendingFiados(localAfter.sales));
+      return localSaleRecord;
     }
+  };
+
+  const handleResetDemoData = async () => {
+    const confirmed = await confirmAction({
+      title: 'Resetar dados de demonstração',
+      message: 'Isso restaurará os 8 produtos iniciais com seus estoques originais e limpará o histórico local de vendas de demonstração. Deseja continuar?',
+      confirmLabel: 'Resetar Dados',
+      destructive: true
+    });
+    if (!confirmed) return;
+
+    const reset = storageService.resetDemoData();
+    setProducts(reset.products);
+    setSales(reset.sales);
+    setFiados([]);
+
+    try {
+      await db.resetDemoDataInCloud(reset.products, currentUser?.nome, currentUser?.id);
+    } catch (err) {
+      console.warn('Reset aplicado localmente:', err);
+    }
+    showToast('Dados de demonstração restaurados com sucesso!', 'success');
   };
 
   const onUpdateSettings = async (newSettings: AppSettings) => {
@@ -456,49 +525,13 @@ const AppContent: React.FC = () => {
   );
 
   if (!currentUser) return (
-    <div className="min-h-screen bg-[#0a0510] flex items-center justify-center p-6 relative overflow-hidden">
-      <div className="w-full max-w-sm bg-white rounded-[48px] p-12 shadow-[0_25px_100px_rgba(0,0,0,0.5)] z-10 animate-in zoom-in-95 duration-500">
-        <div className="text-center mb-10">
-          <div className="w-20 h-20 bg-purple-950 text-white rounded-[32px] flex items-center justify-center text-4xl font-black mx-auto mb-6 shadow-2xl rotate-3">M</div>
-          <h1 className="text-3xl font-black text-purple-950 uppercase tracking-tight leading-none">Cantina <br/>TUSEMM</h1>
-          <p className="text-[9px] text-gray-400 font-black uppercase mt-3 tracking-[0.2em]">Gestão Profissional</p>
-        </div>
-        
-        <form onSubmit={handleLogin} className="space-y-5">
-          {inactivityNotice && (
-            <div className="bg-amber-50 border border-amber-200 text-amber-900 px-4 py-3 rounded-2xl text-xs font-bold text-center leading-snug animate-in fade-in">
-              ⏰ Sua sessão foi encerrada após 10 minutos sem uso. Faça login para continuar.
-            </div>
-          )}
-          {loginError && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl text-xs font-bold text-center leading-snug animate-in fade-in">
-              ⚠️ {loginError}
-            </div>
-          )}
-          <input 
-            type="text" 
-            placeholder="Usuário" 
-            className="w-full bg-gray-50 border-2 border-transparent focus:border-purple-100 rounded-3xl px-8 py-5 font-bold outline-none text-purple-950" 
-            value={loginData.user} 
-            onChange={e => {
-              setLoginError(null);
-              setLoginData({...loginData, user: e.target.value});
-            }} 
-          />
-          <input 
-            type="password" 
-            placeholder="Senha" 
-            className="w-full bg-gray-50 border-2 border-transparent focus:border-purple-100 rounded-3xl px-8 py-5 font-bold outline-none text-purple-950" 
-            value={loginData.pass} 
-            onChange={e => {
-              setLoginError(null);
-              setLoginData({...loginData, pass: e.target.value});
-            }} 
-          />
-          <button type="submit" className="w-full bg-purple-950 text-white py-6 rounded-3xl font-black uppercase tracking-[0.1em] shadow-2xl active:scale-95 transition-all mt-6 text-sm">Entrar</button>
-        </form>
-      </div>
-    </div>
+    <LoginScreen
+      cantinaName={settings.cantinaName}
+      users={users}
+      inactivityNotice={inactivityNotice}
+      onLoginSuccess={handleLoginSuccess}
+      onSuperAdminLogin={handleSuperAdminLogin}
+    />
   );
 
   const currentShift = shifts.find(s => s.status === 'aberto') || null;
@@ -525,8 +558,11 @@ const AppContent: React.FC = () => {
             settings={settings} 
             fiados={fiados}
             customers={customers}
+            sales={sales}
+            currentUser={currentUser}
             onCompleteSale={handleCompleteSale}
             onUpdateSaleContact={handleUpdateSaleContact}
+            onOpenAdminPanel={() => setActiveTab('estoque')}
           />
         )}
         {activeTab === 'caixa' && (
@@ -573,9 +609,33 @@ const AppContent: React.FC = () => {
         {activeTab === 'estoque' && (
           <InventoryView 
             products={products} 
-            onUpdateProduct={(p) => db.saveProduct(p, currentUser?.nome, currentUser?.id)} 
-            onAddProduct={(p) => db.saveProduct(p, currentUser?.nome, currentUser?.id)} 
-            onDeleteProduct={(id, name) => db.deleteProduct(id, name, currentUser?.nome || 'Operador', currentUser?.id || '0')}
+            onUpdateProduct={async (p) => {
+              setProducts((prev) => {
+                const updated = prev.map((item) => (item.id === p.id ? p : item));
+                storageService.saveProducts(updated);
+                return updated;
+              });
+              await db.saveProduct(p, currentUser?.nome, currentUser?.id).catch(() => {});
+            }} 
+            onAddProduct={async (p) => {
+              const tempId = p.id || `LOCAL-PROD-${Date.now().toString(36)}`;
+              const newItem: Product = { ...p, id: tempId, created_at: new Date().toISOString() };
+              setProducts((prev) => {
+                const updated = [...prev, newItem];
+                storageService.saveProducts(updated);
+                return updated;
+              });
+              await db.saveProduct(p, currentUser?.nome, currentUser?.id).catch(() => {});
+            }} 
+            onDeleteProduct={async (id, name) => {
+              setProducts((prev) => {
+                const updated = prev.filter((item) => item.id !== id);
+                storageService.saveProducts(updated);
+                return updated;
+              });
+              await db.deleteProduct(id, name, currentUser?.nome || 'Operador', currentUser?.id || '0').catch(() => {});
+            }}
+            onResetDemoData={handleResetDemoData}
             currentUser={currentUser!} 
           />
         )}
@@ -606,6 +666,7 @@ const AppContent: React.FC = () => {
             onViewCustomers={() => setActiveTab('clientes')}
             onForceUpdate={handleForceUpdate}
             onCheckUpdate={handleManualCheckUpdate}
+            onResetDemoData={handleResetDemoData}
             isCheckingUpdate={isCheckingUpdate}
           />
         )}

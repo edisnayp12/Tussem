@@ -17,6 +17,7 @@ interface SettingsViewProps {
   onViewCustomers?: () => void;
   onForceUpdate?: () => void;
   onCheckUpdate?: () => void;
+  onResetDemoData?: () => Promise<void>;
   isCheckingUpdate?: boolean;
 }
 
@@ -31,6 +32,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
   onViewCustomers,
   onForceUpdate,
   onCheckUpdate,
+  onResetDemoData,
   isCheckingUpdate = false
 }) => {
   const { showToast, confirmAction } = useFeedback();
@@ -319,6 +321,19 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             <i className="fa-solid fa-clipboard-list"></i> Logs do Sistema
           </button>
         </div>
+
+        {(currentUser?.perfil === UserRole.ADMIN || currentUser?.usuario === 'Tusemm') && onResetDemoData && (
+          <div className="mt-4 pt-4 border-t border-gray-100 dark:border-purple-900/40">
+            <button
+              type="button"
+              onClick={onResetDemoData}
+              className="w-full bg-red-50 dark:bg-red-950/50 hover:bg-red-100 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900/60 py-4 rounded-2xl font-black text-xs uppercase transition-all flex items-center justify-center gap-2 active:scale-95"
+            >
+              <i className="fa-solid fa-rotate-left"></i>
+              Resetar dados de demonstração
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Card de Atualizações Automáticas & Cache */}

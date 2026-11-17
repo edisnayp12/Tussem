@@ -91,19 +91,21 @@ const Layout: React.FC<LayoutProps> = ({
                 <span className="text-[7px] font-black uppercase opacity-60">{statusLabels[dbStatus]}</span>
               </div>
             </div>
-            <p className="text-[8px] opacity-40 uppercase font-black tracking-widest">Sinc: {formattedSync} • {currentUser?.usuario}</p>
+            <p className="text-[10px] opacity-80 font-bold tracking-wide truncate max-w-[160px] sm:max-w-xs">
+              Operador: {currentUser?.nome || currentUser?.usuario} · {formattedSync}
+            </p>
           </div>
         </div>
-        <div className="flex items-center gap-2 md:gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3">
           {onOpenAI && (
             <button
               type="button"
               onClick={onOpenAI}
               title="Abrir Assistente Inteligente da Cantina"
-              className="h-10 px-3.5 flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-400 via-amber-300 to-yellow-400 hover:brightness-105 text-purple-950 font-black text-xs shadow-lg shadow-amber-500/25 active:scale-95 transition-all border border-amber-200"
+              className="h-10 px-3 flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-400 via-amber-300 to-yellow-400 hover:brightness-105 text-purple-950 font-black text-xs shadow-lg shadow-amber-500/25 active:scale-95 transition-all border border-amber-200"
             >
-              <i className="fa-solid fa-wand-magic-sparkles text-sm text-purple-900 animate-pulse"></i>
-              <span className="hidden sm:inline uppercase tracking-wider text-[11px]">Assistente IA</span>
+              <i className="fa-solid fa-wand-magic-sparkles text-sm text-purple-900"></i>
+              <span className="hidden md:inline uppercase tracking-wider text-[11px]">Assistente IA</span>
             </button>
           )}
           <div className="hidden md:block">
@@ -131,11 +133,14 @@ const Layout: React.FC<LayoutProps> = ({
             </button>
           )}
           <button 
+            type="button"
             onClick={onLogout}
-            title="Encerrar sessão"
-            className="bg-red-500/10 hover:bg-red-500 text-white w-10 h-10 flex items-center justify-center rounded-xl transition-all border border-white/5 active:scale-90"
+            title="Trocar Operador / Sair"
+            className="h-10 px-3 flex items-center gap-1.5 rounded-xl bg-white/10 hover:bg-red-500/80 text-white text-[11px] font-black uppercase tracking-wide transition-all border border-white/15 active:scale-95"
           >
-            <i className="fa-solid fa-power-off text-sm"></i>
+            <i className="fa-solid fa-right-from-bracket text-xs"></i>
+            <span className="hidden sm:inline">Trocar Operador / Sair</span>
+            <span className="sm:hidden">Sair</span>
           </button>
         </div>
       </header>

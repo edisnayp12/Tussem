@@ -8,6 +8,7 @@ interface InventoryViewProps {
   onUpdateProduct: (p: Product) => Promise<void>;
   onAddProduct: (p: any) => Promise<void>;
   onDeleteProduct?: (id: string, name: string) => Promise<void>;
+  onResetDemoData?: () => Promise<void>;
   currentUser: User;
 }
 
@@ -27,6 +28,7 @@ const InventoryView: React.FC<InventoryViewProps> = ({
   onUpdateProduct,
   onAddProduct,
   onDeleteProduct,
+  onResetDemoData,
   currentUser
 }) => {
   const { showToast, confirmAction } = useFeedback();
@@ -43,12 +45,22 @@ const InventoryView: React.FC<InventoryViewProps> = ({
     preco: '',
     preco_custo: '',
     estoque: '0',
-    categoria: Category.OTHERS as string,
+    categoria: 'Salgados' as string,
     codigo: ''
   });
 
   const allCategories = useMemo(
-    () => Array.from(new Set([...Object.values(Category), ...products.map((p) => p.categoria)])).filter(Boolean),
+    () =>
+      Array.from(
+        new Set([
+          'Salgados',
+          'Bebidas',
+          'Doces',
+          'Combos',
+          ...Object.values(Category),
+          ...products.map((p) => p.categoria)
+        ])
+      ).filter(Boolean),
     [products]
   );
 
@@ -169,7 +181,7 @@ const InventoryView: React.FC<InventoryViewProps> = ({
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-20">
-      <div className="flex justify-between items-end gap-3">
+      <div className="flex flex-wrap justify-between items-end gap-3">
         <div>
           <h2 className="text-2xl font-black text-purple-950 dark:text-purple-200 uppercase tracking-tighter">
             Inventário & Precificação
@@ -178,13 +190,25 @@ const InventoryView: React.FC<InventoryViewProps> = ({
             Gestão de Estoque, Preço de Custo e Venda
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setIsAdding(true)}
-          className="bg-purple-900 dark:bg-purple-700 text-white px-6 py-3 rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-black transition-all shrink-0"
-        >
-          Novo Item
-        </button>
+        <div className="flex flex-wrap gap-2">
+          {isAdmin && onResetDemoData && (
+            <button
+              type="button"
+              onClick={onResetDemoData}
+              className="bg-red-50 dark:bg-red-950/60 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900/50 px-4 py-3 rounded-2xl font-black text-[10px] uppercase hover:bg-red-100 transition-all shrink-0"
+            >
+              <i className="fa-solid fa-rotate-left mr-1.5"></i>
+              Resetar dados de demonstração
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setIsAdding(true)}
+            className="bg-purple-900 dark:bg-purple-700 text-white px-6 py-3 rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-black transition-all shrink-0"
+          >
+            Novo Item
+          </button>
+        </div>
       </div>
 
       {/* Busca e Filtro por Categoria */}

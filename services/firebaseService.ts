@@ -334,6 +334,7 @@ export const db = {
         : `Produto "${product.nome || 'Sem Nome'}" cadastrado (Venda: R$ ${precoVenda}${precoCusto} | Estoque inicial: ${product.estoque ?? 0})`;
 
       this.logAction(opName, opId, acao, detalhes).catch((err) => console.error('Log silenciado:', err));
+      return payload as Product;
     } catch (e: any) {
       console.error('Firestore Save Error:', e);
       throw new Error(e.message || 'Erro de permissão ou conexão.');
@@ -359,6 +360,7 @@ export const db = {
     const newSale: any = {
       id: saleRef.id,
       usuario_id: operatorId && operatorId !== '0' ? operatorId : null,
+      operador_nome: operatorName || (sale.tipo_pedido === 'reserva' ? 'Reserva Online' : 'Operador'),
       forma_pagamento: sale.paymentMethod,
       valor_total: Number(sale.total) || 0,
       status: sale.paymentMethod === PaymentMethod.FIADO || sale.tipo_pedido === 'reserva' ? 'pendente' : 'pago',
@@ -366,7 +368,7 @@ export const db = {
         sale.customerName && typeof sale.customerName === 'string' && sale.customerName.trim()
           ? sale.customerName.trim()
           : 'Balcão',
-      created_at: new Date().toISOString(),
+      created_at: sale.created_at || new Date().toISOString(),
       itens: items.map((i) => ({
         id: doc(collection(dbInstance, 'sales')).id,
         produto_id: i.produto_id,
@@ -378,6 +380,13 @@ export const db = {
       tipo_pedido: sale.tipo_pedido || 'balcao',
       status_entrega: sale.tipo_pedido === 'reserva' ? 'pendente' : 'entregue'
     };
+
+    if (sale.valor_recebido !== undefined && Number.isFinite(Number(sale.valor_recebido))) {
+      newSale.valor_recebido = Number(sale.valor_recebido);
+    }
+    if (sale.troco !== undefined && Number.isFinite(Number(sale.troco))) {
+      newSale.troco = Number(sale.troco);
+    }
 
     const rawTel = sale.telefone_comprador && typeof sale.telefone_comprador === 'string' ? sale.telefone_comprador.trim() : '';
     const cleanTel = normalizePhone(rawTel);
@@ -394,7 +403,15 @@ export const db = {
       if (item.produto_id) {
         const pRef = doc(dbInstance, 'products', item.produto_id);
         const qtd = Number(item.quantidade) || 1;
-        batch.update(pRef, { estoque: increment(-qtd) });
+        try {
+          const pSnap = await getDoc(pRef);
+          if (pSnap.exists()) {
+            const currentEst = Number(pSnap.data()?.estoque) || 0;
+            batch.update(pRef, { estoque: Math.max(0, currentEst - qtd) });
+          }
+        } catch {
+          batch.update(pRef, { estoque: increment(-qtd) });
+        }
       }
     }
 
@@ -426,6 +443,54 @@ export const db = {
     ).catch((err) => console.error('Log venda silenciado:', err));
 
     return newSale as Sale;
+  },
+
+  async seedDemoProducts(products: Product[]) {
+    await ensureAuthReady();
+    const batch = writeBatch(dbInstance);
+    for (const p of products) {
+      const pRef = doc(dbInstance, 'products', p.id);
+      batch.set(pRef, p, { merge: true });
+    }
+    await batch.commit();
+  },
+
+  async resetDemoDataInCloud(freshProducts: Product[], operatorName?: string, operatorId?: string) {
+    await ensureAuthReady();
+    const existingProductsSnap = await getDocs(collection(dbInstance, 'products'));
+    const existingSalesSnap = await getDocs(collection(dbInstance, 'sales'));
+
+    const freshIds = new Set(freshProducts.map((p) => p.id));
+    const ops: Array<(batch: any) => void> = [];
+
+    existingProductsSnap.docs.forEach((d) => {
+      if (!freshIds.has(d.id)) {
+        ops.push((b) => b.delete(d.ref));
+      }
+    });
+
+    for (const p of freshProducts) {
+      ops.push((b) => b.set(doc(dbInstance, 'products', p.id), p));
+    }
+
+    existingSalesSnap.docs.forEach((d) => {
+      ops.push((b) => b.delete(d.ref));
+    });
+
+    for (let i = 0; i < ops.length; i += 400) {
+      const batch = writeBatch(dbInstance);
+      ops.slice(i, i + 400).forEach((apply) => apply(batch));
+      await batch.commit();
+    }
+
+    if (operatorName && operatorId) {
+      this.logAction(
+        operatorName,
+        operatorId,
+        'Reset de Demonstração',
+        'Produtos iniciais restaurados e histórico de demonstração reiniciado.'
+      ).catch(() => {});
+    }
   },
 
   async payFiado(pedidoId: string, method: PaymentMethod, operatorName?: string, operatorId?: string) {
