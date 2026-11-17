@@ -3,6 +3,12 @@
 	"appName": "Cantina TUSEMM",
 	"webDir": "dist",
 	"server": {
-		"androidScheme": "https"
+		"androidScheme": "https",
+		"allowNavigation": [
+			"*.run.app",
+			"*.web.app",
+			"*.firebaseapp.com",
+			"localhost"
+		]
 	}
 }

@@ -1,7 +1,31 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import ReactDOM from 'react-dom/client';
+import { registerSW } from 'virtual:pwa-register';
 import './index.css';
 import App from './App';
+
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  try {
+    const isNativeCap = !!(
+      (window as any).Capacitor?.isNativePlatform?.()
+    );
+    if (!isNativeCap) {
+      const updateSW = registerSW({
+        immediate: true,
+        onNeedRefresh() {
+          updateSW(true).catch(() => {});
+        },
+        onRegisteredSW(_swUrl, registration) {
+          if (registration) {
+            setInterval(() => {
+              registration.update().catch(() => {});
+            }, 20000);
+          }
+        }
+      });
+    }
+  } catch {}
+}
 
 interface ErrorBoundaryProps {
   children: ReactNode;

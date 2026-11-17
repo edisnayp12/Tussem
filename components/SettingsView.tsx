@@ -4,6 +4,7 @@ import { db } from '../services/firebaseService';
 import { storageService } from '../services/storageService';
 import { safeStorage } from '../utils/safeStorage';
 import { useFeedback } from './FeedbackProvider';
+import { getRunningBuildId, getRuntimePlatformLabel } from '../services/autoUpdateService';
 
 interface SettingsViewProps {
   users: User[];
@@ -325,7 +326,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         <div className="flex justify-between items-center mb-4">
           <div>
             <h3 className="text-sm font-black text-purple-900 dark:text-purple-200 uppercase">Atualizações do Sistema</h3>
-            <p className="text-[10px] text-gray-400 font-bold uppercase mt-0.5">Sincronização & Versões Automáticas</p>
+            <p className="text-[10px] text-gray-400 font-bold uppercase mt-0.5">Sincronização Automática • Web, PWA & Android</p>
           </div>
           <span className="flex items-center gap-1.5 px-3 py-1 bg-green-50 dark:bg-green-950/60 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300 text-[9px] font-black uppercase rounded-full">
             <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
@@ -334,13 +335,46 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
 
         <div className="bg-purple-50/50 dark:bg-purple-950/50 p-4 rounded-2xl border border-purple-100 dark:border-purple-900/40 text-[11px] text-purple-900 dark:text-purple-200 space-y-2 mb-5">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-purple-100 dark:border-purple-900/40 text-[10px]">
+            <span className="font-black uppercase text-purple-700 dark:text-purple-300">
+              Ambiente: {getRuntimePlatformLabel()}
+            </span>
+            <span className="font-mono font-bold text-gray-600 dark:text-purple-300">
+              Build: {getRunningBuildId()}
+            </span>
+          </div>
           <p className="flex items-center gap-2 font-bold">
             <i className="fa-solid fa-cloud-arrow-down text-purple-600 dark:text-purple-300"></i>
-            <span>O sistema verifica novas versões a cada <strong>30 segundos</strong> e sempre que você abre o aplicativo.</span>
+            <span>O sistema verifica novas versões a cada <strong>20 segundos</strong>, ao abrir ou retomar o app, ignorando cache antigo.</span>
           </p>
           <p className="text-gray-500 dark:text-purple-300/70 text-[10px]">
-            Se uma nova versão for publicada na nuvem, o aplicativo atualiza automaticamente sem necessidade de limpar manualmente o cache do celular.
+            Em navegadores e no App Android, qualquer nova versão publicada limpa caches antigos e atualiza automaticamente.
           </p>
+        </div>
+
+        <div className="mb-4">
+          <label className="text-[10px] font-black text-gray-500 dark:text-purple-300 uppercase ml-2 mb-1 block">
+            URL do Servidor para Auto-Atualização Android (OTA)
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="url"
+              placeholder="https://cantina-tusemm.web.app"
+              className="flex-1 bg-gray-50 dark:bg-[#20143a] border-none rounded-2xl px-4 py-3 text-xs font-bold text-gray-700 dark:text-white outline-none"
+              value={appSettings.liveAppUrl || ''}
+              onChange={e => setAppSettings({ ...appSettings, liveAppUrl: e.target.value })}
+            />
+            <button
+              type="button"
+              onClick={() => {
+                onUpdateSettings(appSettings);
+                showToast('URL de atualização Android salva!', 'success');
+              }}
+              className="bg-purple-100 dark:bg-purple-900/60 text-purple-900 dark:text-purple-100 px-4 py-3 rounded-2xl font-black text-[10px] uppercase hover:bg-purple-200 transition-all"
+            >
+              Salvar URL
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -424,7 +458,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
       )}
       {/* Rodapé de Versão */}
       <div className="pt-8 pb-4 text-center">
-        <p className="text-[8px] font-black text-gray-300 uppercase tracking-[0.4em]">TUSEMM Sistema v2.0.1 • Online Sync</p>
+        <p className="text-[8px] font-black text-gray-300 uppercase tracking-[0.4em]">TUSEMM Sistema • {getRunningBuildId()} • Auto-Update</p>
       </div>
     </div>
   );

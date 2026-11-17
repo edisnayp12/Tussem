@@ -20,7 +20,8 @@ import {
   initAutoUpdateWatcher, 
   subscribeToUpdateNotice, 
   checkForAppUpdates, 
-  forceAppUpdate 
+  forceAppUpdate,
+  setLiveAppUrl
 } from './services/autoUpdateService';
 
 const isCurrentRouteReserva = (): boolean => {
@@ -132,6 +133,14 @@ const AppContent: React.FC = () => {
       window.location.reload();
     }
   };
+
+  // Sincroniza URL remota de OTA (Android/PWA) quando carregada do Firestore
+  useEffect(() => {
+    if (settings.liveAppUrl) {
+      setLiveAppUrl(settings.liveAppUrl);
+      checkForAppUpdates(true).catch(() => {});
+    }
+  }, [settings.liveAppUrl]);
 
   // Efeito para sincronizar e aplicar tema no DOM e meta tag
   useEffect(() => {

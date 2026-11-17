@@ -43,6 +43,7 @@ export interface AppSettings {
   pixCidade?: string;
   categoriasPersonalizadas?: string[];
   tema?: 'light' | 'dark';
+  liveAppUrl?: string;
 }
 
 export interface Product {

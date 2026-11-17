@@ -1,29 +1,172 @@
-
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
+    <script>window.__APP_BUILD_ID__ = "v2.1.0-1794919333585";</script>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <meta name="theme-color" content="#4c1d95">
-    <title>Cantina - Gestão Profissional</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Cantina TUSEMM" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <title>Cantina TUSEMM</title>
+    <meta name="description" content="Sistema Profissional de Gestão de Vendas, Estoque e Fiados Maria Mulambo." />
+    <meta property="og:title" content="Cantina TUSEMM" />
+    <meta property="og:description" content="Sistema Profissional de Gestão de Vendas, Estoque e Fiados Maria Mulambo." />
+    <script>
+      // Global error listener to prevent cross-origin script error bubbling
+      window.addEventListener('error', function(e) {
+        if (!e.error && (!e.message || e.message === 'Script error.')) {
+          if (e.preventDefault) e.preventDefault();
+          return true;
+        }
+      }, true);
 
-<script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@^19.2.4",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
-    "react/": "https://esm.sh/react@^19.2.4/",
-    "vite": "https://esm.sh/vite@^7.3.1",
-    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.4",
-    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@^2.95.3"
-  }
-}
-</script>
-  <script type="module" crossorigin src="/assets/index-D3mN-7oR.js"></script>
-</head>
+      // Shared reload guard to avoid double reloads across Service Worker listeners
+      window.__tusemmReloading = false;
+
+      // Prevent theme flashing on page reload (compatible with Safari Private Mode / restricted storage)
+      try {
+        var savedTheme = null;
+        try {
+          savedTheme = window.localStorage ? window.localStorage.getItem('cantina_theme') : null;
+        } catch (err) {}
+        if (!savedTheme && window.name && window.name.indexOf('cantina_theme=dark') !== -1) {
+          savedTheme = 'dark';
+        }
+        if (savedTheme === 'dark') {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+      } catch (e) {}
+
+      // Boot-time version & cache check BEFORE React loads (bypasses stale browser disk/SW cache)
+      (function() {
+        try {
+          var isNativeCap = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+          if (isNativeCap || !window.fetch || !/^https?:$/.test(window.location.protocol)) return;
+
+          var verifyLiveBuild = function() {
+            var currentBuild = window.__APP_BUILD_ID__;
+            if (!currentBuild || window.__tusemmReloading) return;
+
+            var lastReloadAt = 0;
+            try {
+              lastReloadAt = Number(window.sessionStorage.getItem('cantina_boot_reload_at') || '0');
+            } catch (e) {}
+            if (Date.now() - lastReloadAt < 8000) return;
+
+            fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
+              .then(function(res) { return res.ok ? res.json() : null; })
+              .catch(function() { return null; })
+              .then(function(data) {
+                if (!data || !data.version || data.version === currentBuild) return;
+                if (window.__tusemmReloading) return;
+                window.__tusemmReloading = true;
+                try {
+                  window.sessionStorage.setItem('cantina_boot_reload_at', String(Date.now()));
+                } catch (e) {}
+
+                var doReload = function() {
+                  try {
+                    var nextUrl = new URL(window.location.href);
+                    nextUrl.searchParams.set('_v', String(Date.now()));
+                    window.location.replace(nextUrl.toString());
+                  } catch (e) {
+                    window.location.reload();
+                  }
+                };
+
+                var cleanupTasks = [];
+                try {
+                  if ('caches' in window) {
+                    cleanupTasks.push(
+                      caches.keys().then(function(keys) {
+                        return Promise.all(keys.map(function(k) { return caches.delete(k); }));
+                      })
+                    );
+                  }
+                  if ('serviceWorker' in navigator) {
+                    cleanupTasks.push(
+                      navigator.serviceWorker.getRegistrations().then(function(regs) {
+                        return Promise.all(regs.map(function(r) { return r.update().catch(function() {}); }));
+                      })
+                    );
+                  }
+                } catch (e) {}
+
+                Promise.all(cleanupTasks).then(doReload).catch(doReload);
+              });
+          };
+
+          verifyLiveBuild();
+          window.addEventListener('pageshow', function(ev) {
+            if (ev && ev.persisted) verifyLiveBuild();
+          });
+        } catch (e) {}
+      })();
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
+  <script type="module" crossorigin src="/assets/index-Batmd-9c.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/vendor-D_2DgoKh.js">
+  <link rel="modulepreload" crossorigin href="/assets/firebase-CWy17rmS.js">
+  <link rel="stylesheet" crossorigin href="/assets/index-DMuc8fnM.css">
+<link rel="manifest" href="/manifest.webmanifest"></head>
 <body class="bg-gray-50 text-gray-900 font-sans antialiased overflow-x-hidden">
     <div id="root"></div>
+    <script>
+      // Sistema de atualização automática de Service Workers em todos os navegadores
+      (function() {
+        try {
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.addEventListener('controllerchange', function() {
+              if (window.__tusemmReloading) return;
+              var lastReloadAt = 0;
+              try {
+                lastReloadAt = Number(window.sessionStorage.getItem('cantina_boot_reload_at') || '0');
+              } catch (e) {}
+              if (Date.now() - lastReloadAt < 8000) return;
+
+              window.__tusemmReloading = true;
+              try {
+                window.sessionStorage.setItem('cantina_boot_reload_at', String(Date.now()));
+              } catch (e) {}
+              console.log('[PWA] Nova versão detectada. Recarregando página automaticamente...');
+              try {
+                var u = new URL(window.location.href);
+                u.searchParams.set('_v', String(Date.now()));
+                window.location.replace(u.toString());
+              } catch (e) {
+                window.location.reload();
+              }
+            });
+
+            var updateAll = function() {
+              navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                for (var i = 0; i < registrations.length; i++) {
+                  try { registrations[i].update(); } catch(e) {}
+                }
+              }).catch(function() {});
+            };
+
+            window.addEventListener('load', updateAll);
+            window.addEventListener('focus', updateAll);
+            window.addEventListener('online', updateAll);
+            window.addEventListener('pageshow', function(e) {
+              if (e && e.persisted) updateAll();
+            });
+            document.addEventListener('visibilitychange', function() {
+              if (document.visibilityState === 'visible') updateAll();
+            });
+          }
+        } catch (e) {}
+      })();
+    </script>
 </body>
 </html>

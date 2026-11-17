@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import fs from "node:fs";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 
@@ -7,6 +8,7 @@ async function startServer() {
   const app = express();
   const PORT = process.env.PORT || 3000;
 
+  app.set("etag", false);
   app.use(cors());
   app.use(express.json());
 
@@ -168,35 +170,59 @@ Regras:
   // AUTO-UPDATE & VERSION ENDPOINT
   // ==========================================
   const SERVER_START_TIME = new Date().toISOString();
-  const APP_VERSION = process.env.APP_VERSION || `v1.2.0-${Date.now()}`;
+  const distPath = path.join(process.cwd(), "dist");
+  const distVersionFile = path.join(distPath, "version.json");
 
-  app.get("/api/version", (req, res) => {
-    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0");
+  let resolvedVersion = process.env.APP_VERSION || "";
+  if (!resolvedVersion && process.env.NODE_ENV === "production" && fs.existsSync(distVersionFile)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(distVersionFile, "utf-8"));
+      if (parsed?.version) resolvedVersion = String(parsed.version);
+    } catch {}
+  }
+  if (!resolvedVersion) {
+    resolvedVersion = `v2.1.0-${Date.now()}`;
+  }
+  // Compartilha com vite.config.ts quando rodando em dev middleware
+  process.env.APP_VERSION = resolvedVersion;
+  const APP_VERSION = resolvedVersion;
+
+  const setNoCacheHeaders = (res: express.Response) => {
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate, proxy-revalidate, max-age=0");
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
+    res.setHeader("Surrogate-Control", "no-store");
+  };
+
+  const sendVersionPayload = (_req: express.Request, res: express.Response) => {
+    setNoCacheHeaders(res);
+    res.setHeader("Access-Control-Allow-Origin", "*");
     res.json({
       version: APP_VERSION,
+      buildId: APP_VERSION,
       serverTime: new Date().toISOString(),
       startedAt: SERVER_START_TIME,
       name: "Cantina TUSEMM"
     });
-  });
+  };
 
-  // Middleware anti-cache para garantir que index.html e service workers nunca fiquem presos no cache do navegador
+  app.get("/api/version", sendVersionPayload);
+  app.get("/version.json", sendVersionPayload);
+
+  // Middleware anti-cache para garantir que index.html, version.json e service workers nunca fiquem presos no cache do navegador
   app.use((req, res, next) => {
     const p = req.path.toLowerCase();
     if (
-      p === "/" || 
-      p === "/index.html" || 
-      p.endsWith(".html") || 
-      p.includes("sw.js") || 
-      p.includes("registersw.js") || 
-      p.includes("manifest") || 
+      p === "/" ||
+      p === "/index.html" ||
+      p === "/version.json" ||
+      p.endsWith(".html") ||
+      p.includes("sw.js") ||
+      p.includes("registersw.js") ||
+      p.includes("manifest") ||
       p.startsWith("/api/")
     ) {
-      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0");
-      res.setHeader("Pragma", "no-cache");
-      res.setHeader("Expires", "0");
+      setNoCacheHeaders(res);
     }
     next();
   });
@@ -209,14 +235,19 @@ Regras:
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath, {
+      etag: false,
+      lastModified: false,
       setHeaders: (res, filePath) => {
         const lower = filePath.toLowerCase();
-        if (lower.endsWith(".html") || lower.includes("sw.js") || lower.includes("manifest") || lower.includes("registersw")) {
-          res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0");
-          res.setHeader("Pragma", "no-cache");
-          res.setHeader("Expires", "0");
+        if (
+          lower.endsWith(".html") ||
+          lower.endsWith("version.json") ||
+          lower.includes("sw.js") ||
+          lower.includes("manifest") ||
+          lower.includes("registersw")
+        ) {
+          setNoCacheHeaders(res);
         } else if (lower.includes("/assets/")) {
           // Arquivos com hash de build podem ter cache longo
           res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
@@ -225,11 +256,9 @@ Regras:
     }));
 
     // For Express 5 compatibility (wildcards must be named)
-    app.get('*all', (req, res) => {
-      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0");
-      res.setHeader("Pragma", "no-cache");
-      res.setHeader("Expires", "0");
-      res.sendFile(path.join(distPath, 'index.html'));
+    app.get("*all", (req, res) => {
+      setNoCacheHeaders(res);
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
