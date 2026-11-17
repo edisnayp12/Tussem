@@ -86,6 +86,44 @@
         "origem": { "type": "string" }
       },
       "required": ["nome", "telefone", "telefone_limpo"]
+    },
+    "CashShift": {
+      "title": "CashShift",
+      "description": "Cash register shift with opening, movements, outflows, and closing audit",
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "enum": ["aberto", "fechado"] },
+        "aberto_em": { "type": "string" },
+        "aberto_por_nome": { "type": "string" },
+        "aberto_por_id": { "type": "string" },
+        "valor_abertura": { "type": "number" },
+        "fechado_em": { "type": "string" },
+        "fechado_por_nome": { "type": "string" },
+        "fechado_por_id": { "type": "string" },
+        "valor_fechamento_informado": { "type": "number" },
+        "valor_fechamento_calculado": { "type": "number" },
+        "diferenca": { "type": "number" },
+        "observacoes_fechamento": { "type": "string" },
+        "total_sangrias": { "type": "number" },
+        "total_suprimentos": { "type": "number" },
+        "total_saidas": { "type": "number" }
+      },
+      "required": ["status", "aberto_em", "aberto_por_nome", "valor_abertura"]
+    },
+    "CashOutflow": {
+      "title": "CashOutflow",
+      "description": "Cash outflow / expense entry from the cash register",
+      "type": "object",
+      "properties": {
+        "shift_id": { "type": "string" },
+        "categoria": { "type": "string", "maxLength": 60 },
+        "valor": { "type": "number" },
+        "motivo": { "type": "string", "maxLength": 200 },
+        "data": { "type": "string" },
+        "operador_nome": { "type": "string", "maxLength": 80 },
+        "operador_id": { "type": "string", "maxLength": 80 }
+      },
+      "required": ["categoria", "valor", "motivo", "data", "operador_nome"]
     }
   },
   "firestore": {
@@ -112,6 +150,14 @@
     "/customers/{customerId}": {
       "schema": { "$ref": "#/entities/Customer" },
       "description": "Registered customer records with contact and order history."
+    },
+    "/cash_shifts/{shiftId}": {
+      "schema": { "$ref": "#/entities/CashShift" },
+      "description": "Cash register shift records."
+    },
+    "/cash_outflows/{outflowId}": {
+      "schema": { "$ref": "#/entities/CashOutflow" },
+      "description": "Cash register outflow and expense entries."
     }
   }
 }

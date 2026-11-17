@@ -9,6 +9,7 @@ import { getSaleWhatsAppReceiptLink, printSaleThermalReceipt } from '../utils/re
 import { playSuccessChime } from '../utils/soundUtils';
 import { parseLocaleNumber, formatSafeDateTime } from '../utils/browserUtils';
 import { useFeedback } from './FeedbackProvider';
+import CashOutflowModal from './CashOutflowModal';
 
 interface SalesViewProps {
   products: Product[];
@@ -17,8 +18,10 @@ interface SalesViewProps {
   customers?: Customer[];
   sales?: Sale[];
   currentUser?: User | null;
+  hasOpenShift?: boolean;
   onCompleteSale: (sale: any) => Promise<Sale | void>;
   onUpdateSaleContact?: (saleId: string, telefone: string, cliente_nome?: string) => Promise<void>;
+  onAddCashOutflow?: (data: { categoria: string; valor: number; motivo: string }) => Promise<void>;
   onOpenAdminPanel?: () => void;
 }
 
@@ -67,8 +70,10 @@ const SalesView: React.FC<SalesViewProps> = ({
   customers = [],
   sales = [],
   currentUser,
+  hasOpenShift = false,
   onCompleteSale,
   onUpdateSaleContact,
+  onAddCashOutflow,
   onOpenAdminPanel
 }) => {
   const { showToast } = useFeedback();
@@ -102,6 +107,7 @@ const SalesView: React.FC<SalesViewProps> = ({
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
   const [isSavingReceiptPhone, setIsSavingReceiptPhone] = useState(false);
   const [isFinishing, setIsFinishing] = useState(false);
+  const [isOutflowModalOpen, setIsOutflowModalOpen] = useState(false);
 
   const isAdmin = currentUser?.perfil === UserRole.ADMIN || currentUser?.usuario === 'Tusemm';
 
@@ -529,6 +535,18 @@ const SalesView: React.FC<SalesViewProps> = ({
                 <i className="fa-solid fa-clock-rotate-left"></i>
                 <span>Histórico ({recentSales.length})</span>
               </button>
+
+              {onAddCashOutflow && (
+                <button
+                  type="button"
+                  onClick={() => setIsOutflowModalOpen(true)}
+                  className="bg-rose-600 hover:bg-rose-700 text-white px-4 h-[52px] rounded-2xl font-black text-xs uppercase flex items-center justify-center gap-2 shadow-sm active:scale-95 transition-all"
+                  title="Lançar saída de valor do caixa"
+                >
+                  <i className="fa-solid fa-money-bill-transfer"></i>
+                  <span className="hidden sm:inline">Saída Caixa</span>
+                </button>
+              )}
 
               {isAdmin && onOpenAdminPanel && (
                 <button
@@ -1262,6 +1280,16 @@ const SalesView: React.FC<SalesViewProps> = ({
             }
           }}
           onClose={() => setIsScannerOpen(false)}
+        />
+      )}
+
+      {/* MODAL RÁPIDO: SAÍDA DE VALOR DO CAIXA */}
+      {onAddCashOutflow && (
+        <CashOutflowModal
+          isOpen={isOutflowModalOpen}
+          onClose={() => setIsOutflowModalOpen(false)}
+          onConfirm={onAddCashOutflow}
+          hasOpenShift={hasOpenShift}
         />
       )}
     </>

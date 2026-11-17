@@ -30,11 +30,42 @@ import {
 } from 'firebase/firestore';
 
 import firebaseConfig from '../firebase-applet-config.json';
-import { Product, Sale, PaymentMethod, SaleItem, User, AppSettings, Customer, CashShift, CashMovement } from '../types';
+import { Product, Sale, PaymentMethod, SaleItem, User, AppSettings, Customer, CashShift, CashMovement, CashOutflow } from '../types';
 import { normalizePhone, formatPhone } from '../utils/phoneUtils';
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write'
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+  const errInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo:
+        auth.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email
+        })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error:', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 const targetDbId = (firebaseConfig as any).firestoreDatabaseId || '(default)';
 
@@ -751,6 +782,21 @@ export const db = {
     );
   },
 
+  subscribeToCashOutflows: (onUpdate: (outflows: CashOutflow[]) => void, onError?: (err: any) => void) => {
+    const q = query(collection(dbInstance, 'cash_outflows'), orderBy('data', 'desc'), limit(300));
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const list = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as CashOutflow));
+        onUpdate(list);
+      },
+      (error) => {
+        console.error('Erro ao ouvir saídas de caixa:', error);
+        onError && onError(error);
+      }
+    );
+  },
+
   async openCashShift(valorAbertura: number, operadorNome: string, operadorId: string): Promise<CashShift> {
     await ensureAuthReady();
     const shiftRef = doc(collection(dbInstance, 'cash_shifts'));
@@ -763,9 +809,14 @@ export const db = {
       valor_abertura: Number(valorAbertura) || 0,
       movimentacoes: [],
       total_sangrias: 0,
-      total_suprimentos: 0
+      total_suprimentos: 0,
+      total_saidas: 0
     };
-    await setDoc(shiftRef, newShift);
+    try {
+      await setDoc(shiftRef, newShift);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `cash_shifts/${shiftRef.id}`);
+    }
     await this.logAction(
       operadorNome,
       operadorId,
@@ -777,39 +828,232 @@ export const db = {
 
   async addCashMovement(
     shiftId: string,
-    tipo: 'sangria' | 'suprimento',
+    tipo: 'sangria' | 'suprimento' | 'saida',
     valor: number,
     motivo: string,
     operadorNome: string,
-    operadorId: string
-  ) {
+    operadorId: string,
+    categoria?: string
+  ): Promise<CashMovement> {
     await ensureAuthReady();
     const shiftRef = doc(dbInstance, 'cash_shifts', shiftId);
     const snap = await getDoc(shiftRef);
     if (!snap.exists()) throw new Error('Turno de caixa não encontrado.');
     const shift = snap.data() as CashShift;
+    const defaultMotivo =
+      tipo === 'sangria'
+        ? 'Retirada de dinheiro (Sangria)'
+        : tipo === 'saida'
+        ? 'Saída de valor do caixa'
+        : 'Reforço de troco (Suprimento)';
+
     const movement: CashMovement = {
-      id: Math.random().toString(36).substring(2, 9),
+      id: doc(collection(dbInstance, 'cash_outflows')).id,
       tipo,
+      ...(categoria ? { categoria } : {}),
       valor: Number(valor) || 0,
-      motivo: motivo.trim() || (tipo === 'sangria' ? 'Retirada de dinheiro (Sangria)' : 'Reforço de troco (Suprimento)'),
+      motivo: motivo.trim() || defaultMotivo,
       data: new Date().toISOString(),
       operador_nome: operadorNome,
       operador_id: operadorId
     };
     const currentMovements = shift.movimentacoes || [];
     const updatedMovements = [...currentMovements, movement];
-    const totalSangrias = updatedMovements.filter((m) => m.tipo === 'sangria').reduce((a, b) => a + (Number(b.valor) || 0), 0);
-    const totalSuprimentos = updatedMovements.filter((m) => m.tipo === 'suprimento').reduce((a, b) => a + (Number(b.valor) || 0), 0);
+    const totalSangrias = updatedMovements
+      .filter((m) => m.tipo === 'sangria')
+      .reduce((a, b) => a + (Number(b.valor) || 0), 0);
+    const totalSuprimentos = updatedMovements
+      .filter((m) => m.tipo === 'suprimento')
+      .reduce((a, b) => a + (Number(b.valor) || 0), 0);
+    const totalSaidas = updatedMovements
+      .filter((m) => m.tipo === 'saida')
+      .reduce((a, b) => a + (Number(b.valor) || 0), 0);
 
-    await updateDoc(shiftRef, {
-      movimentacoes: updatedMovements,
-      total_sangrias: totalSangrias,
-      total_suprimentos: totalSuprimentos
-    });
+    try {
+      await updateDoc(shiftRef, {
+        movimentacoes: updatedMovements,
+        total_sangrias: totalSangrias,
+        total_suprimentos: totalSuprimentos,
+        total_saidas: totalSaidas
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `cash_shifts/${shiftId}`);
+    }
 
-    const label = tipo === 'sangria' ? 'Sangria de Caixa' : 'Suprimento de Caixa';
-    await this.logAction(operadorNome, operadorId, label, `R$ ${(Number(valor) || 0).toFixed(2)} - ${movement.motivo}`);
+    const label =
+      tipo === 'sangria'
+        ? 'Sangria de Caixa'
+        : tipo === 'saida'
+        ? 'Saída de Caixa'
+        : 'Suprimento de Caixa';
+    await this.logAction(
+      operadorNome,
+      operadorId,
+      label,
+      `R$ ${(Number(valor) || 0).toFixed(2)}${categoria ? ` [${categoria}]` : ''} - ${movement.motivo}`
+    );
+    return movement;
+  },
+
+  async removeCashMovement(
+    shiftId: string,
+    movementId: string,
+    operadorNome: string,
+    operadorId: string
+  ) {
+    await ensureAuthReady();
+    const shiftRef = doc(dbInstance, 'cash_shifts', shiftId);
+    const snap = await getDoc(shiftRef);
+    if (!snap.exists()) return;
+    const shift = snap.data() as CashShift;
+    const currentMovements = shift.movimentacoes || [];
+    const removed = currentMovements.find((m) => m.id === movementId);
+    const updatedMovements = currentMovements.filter((m) => m.id !== movementId);
+
+    const totalSangrias = updatedMovements
+      .filter((m) => m.tipo === 'sangria')
+      .reduce((a, b) => a + (Number(b.valor) || 0), 0);
+    const totalSuprimentos = updatedMovements
+      .filter((m) => m.tipo === 'suprimento')
+      .reduce((a, b) => a + (Number(b.valor) || 0), 0);
+    const totalSaidas = updatedMovements
+      .filter((m) => m.tipo === 'saida')
+      .reduce((a, b) => a + (Number(b.valor) || 0), 0);
+
+    try {
+      await updateDoc(shiftRef, {
+        movimentacoes: updatedMovements,
+        total_sangrias: totalSangrias,
+        total_suprimentos: totalSuprimentos,
+        total_saidas: totalSaidas
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `cash_shifts/${shiftId}`);
+    }
+
+    if (removed) {
+      await this.logAction(
+        operadorNome,
+        operadorId,
+        'Estorno de Movimentação',
+        `Movimentação (${removed.tipo}) de R$ ${(Number(removed.valor) || 0).toFixed(2)} removida: ${removed.motivo}`
+      ).catch(() => {});
+    }
+  },
+
+  async addCashOutflow(data: {
+    categoria: string;
+    valor: number;
+    motivo: string;
+    operador_nome: string;
+    operador_id: string;
+    shift_id?: string | null;
+    id?: string;
+    data?: string;
+  }): Promise<CashOutflow> {
+    await ensureAuthReady();
+    const outRef = data.id
+      ? doc(dbInstance, 'cash_outflows', data.id)
+      : doc(collection(dbInstance, 'cash_outflows'));
+    const nowIso = data.data || new Date().toISOString();
+    const cleanCategory = (data.categoria || 'Despesas Gerais').trim().slice(0, 60);
+    const cleanReason = (data.motivo || 'Saída de valor do caixa').trim().slice(0, 200);
+    const cleanOperator = (data.operador_nome || 'Operador').trim().slice(0, 80);
+    const numericVal = Number(data.valor) || 0;
+
+    const outflowRecord: CashOutflow = {
+      id: outRef.id,
+      ...(data.shift_id ? { shift_id: data.shift_id } : {}),
+      categoria: cleanCategory,
+      valor: numericVal,
+      motivo: cleanReason,
+      data: nowIso,
+      operador_nome: cleanOperator,
+      operador_id: data.operador_id || '0'
+    };
+
+    try {
+      await setDoc(outRef, outflowRecord);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `cash_outflows/${outRef.id}`);
+    }
+
+    if (data.shift_id) {
+      const shiftRef = doc(dbInstance, 'cash_shifts', data.shift_id);
+      const snap = await getDoc(shiftRef).catch(() => null);
+      if (snap && snap.exists()) {
+        const shift = snap.data() as CashShift;
+        if (shift.status === 'aberto') {
+          const movement: CashMovement = {
+            id: outRef.id,
+            tipo: 'saida',
+            categoria: cleanCategory,
+            valor: numericVal,
+            motivo: cleanReason,
+            data: nowIso,
+            operador_nome: cleanOperator,
+            operador_id: data.operador_id || '0'
+          };
+          const currentMovements = shift.movimentacoes || [];
+          const updatedMovements = [...currentMovements.filter((m) => m.id !== outRef.id), movement];
+          const totalSaidas = updatedMovements
+            .filter((m) => m.tipo === 'saida')
+            .reduce((a, b) => a + (Number(b.valor) || 0), 0);
+
+          await updateDoc(shiftRef, {
+            movimentacoes: updatedMovements,
+            total_saidas: totalSaidas
+          }).catch((err) => console.warn('Aviso ao vincular saída no turno:', err));
+        }
+      }
+    }
+
+    this.logAction(
+      cleanOperator,
+      data.operador_id || '0',
+      'Saída de Valores do Caixa',
+      `R$ ${numericVal.toFixed(2)} [${cleanCategory}] - ${cleanReason}`
+    ).catch(() => {});
+
+    return outflowRecord;
+  },
+
+  async deleteCashOutflow(
+    outflow: CashOutflow,
+    operadorNome: string,
+    operadorId: string
+  ) {
+    await ensureAuthReady();
+    try {
+      await deleteDoc(doc(dbInstance, 'cash_outflows', outflow.id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `cash_outflows/${outflow.id}`);
+    }
+
+    if (outflow.shift_id) {
+      const shiftRef = doc(dbInstance, 'cash_shifts', outflow.shift_id);
+      const snap = await getDoc(shiftRef).catch(() => null);
+      if (snap && snap.exists()) {
+        const shift = snap.data() as CashShift;
+        if (shift.status === 'aberto') {
+          const updatedMovements = (shift.movimentacoes || []).filter((m) => m.id !== outflow.id);
+          const totalSaidas = updatedMovements
+            .filter((m) => m.tipo === 'saida')
+            .reduce((a, b) => a + (Number(b.valor) || 0), 0);
+          await updateDoc(shiftRef, {
+            movimentacoes: updatedMovements,
+            total_saidas: totalSaidas
+          }).catch(() => {});
+        }
+      }
+    }
+
+    this.logAction(
+      operadorNome,
+      operadorId,
+      'Exclusão de Saída do Caixa',
+      `Saída de R$ ${(Number(outflow.valor) || 0).toFixed(2)} [${outflow.categoria}] removida (${outflow.motivo})`
+    ).catch(() => {});
   },
 
   async closeCashShift(
@@ -836,12 +1080,17 @@ export const db = {
       total_vendas_pix: totaisVendas.pix || 0,
       total_vendas_debito: totaisVendas.debito || 0,
       total_vendas_credito: totaisVendas.credito || 0,
-      total_vendas_fiado: totaisVendas.fiado || 0
+      total_vendas_fiado: totaisVendas.fiado || 0,
+      ...(totaisVendas.saidas !== undefined ? { total_saidas: totaisVendas.saidas } : {})
     };
     if (obs && obs.trim()) {
       updateData.observacoes_fechamento = obs.trim();
     }
-    await updateDoc(shiftRef, updateData);
+    try {
+      await updateDoc(shiftRef, updateData);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `cash_shifts/${shiftId}`);
+    }
     const diffStatus =
       diferenca === 0
         ? 'Conferência Exata'

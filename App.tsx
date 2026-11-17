@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Product, Sale, PaymentMethod, User, AppSettings, UserRole, Customer, AuditLog, CashShift } from './types';
+import { Product, Sale, PaymentMethod, User, AppSettings, UserRole, Customer, AuditLog, CashShift, CashOutflow, CashMovement } from './types';
 import { db } from './services/firebaseService';
 import Layout from './components/Layout';
 import DashboardView from './components/DashboardView';
@@ -84,7 +84,8 @@ const AppContent: React.FC = () => {
   const [sales, setSales] = useState<Sale[]>(initialDemo.sales);
   const [fiados, setFiados] = useState<Sale[]>(() => computePendingFiados(initialDemo.sales));
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [shifts, setShifts] = useState<CashShift[]>([]);
+  const [shifts, setShifts] = useState<CashShift[]>(() => storageService.getCashShifts());
+  const [cashOutflows, setCashOutflows] = useState<CashOutflow[]>(() => storageService.getCashOutflows());
   const [users, setUsers] = useState<User[]>([]);
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [isAIOpen, setIsAIOpen] = useState(false);
@@ -257,6 +258,7 @@ const AppContent: React.FC = () => {
     let unsubSales: any;
     let unsubCustomers: any;
     let unsubShifts: any;
+    let unsubOutflows: any;
     let unsubUsers: any;
     let unsubSettings: any;
     let unsubLogs: any;
@@ -303,7 +305,28 @@ const AppContent: React.FC = () => {
           setLastSync(new Date());
         }, handleError);
         unsubCustomers = db.subscribeToCustomers((c) => { setCustomers(c); setLastSync(new Date()); }, handleError);
-        unsubShifts = db.subscribeToCashShifts((sh) => { setShifts(sh); setLastSync(new Date()); }, handleError);
+        unsubShifts = db.subscribeToCashShifts((sh) => {
+          const localShifts = storageService.getCashShifts();
+          const cloudIds = new Set(sh.map((item) => item.id));
+          const merged = [
+            ...sh,
+            ...localShifts.filter((ls) => ls.id.startsWith('LOCAL-') && !cloudIds.has(ls.id))
+          ].sort((a, b) => new Date(b.aberto_em).getTime() - new Date(a.aberto_em).getTime());
+          setShifts(merged);
+          storageService.saveCashShifts(merged);
+          setLastSync(new Date());
+        }, handleError);
+        unsubOutflows = db.subscribeToCashOutflows((outs) => {
+          const localOuts = storageService.getCashOutflows();
+          const cloudIds = new Set(outs.map((item) => item.id));
+          const merged = [
+            ...outs,
+            ...localOuts.filter((lo) => lo.id.startsWith('LOCAL-') && !cloudIds.has(lo.id))
+          ].sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
+          setCashOutflows(merged);
+          storageService.saveCashOutflows(merged);
+          setLastSync(new Date());
+        }, handleError);
         unsubUsers = db.subscribeToUsers((u) => { setUsers(u); setLastSync(new Date()); }, handleError);
         unsubSettings = db.subscribeToSettings((set) => { 
           setSettings(prev => ({
@@ -335,6 +358,7 @@ const AppContent: React.FC = () => {
       unsubSales && unsubSales();
       unsubCustomers && unsubCustomers();
       unsubShifts && unsubShifts();
+      unsubOutflows && unsubOutflows();
       unsubUsers && unsubUsers();
       unsubSettings && unsubSettings();
       unsubLogs && unsubLogs();
@@ -483,6 +507,268 @@ const AppContent: React.FC = () => {
     await db.updateSaleContact(saleId, telefone, cliente_nome, currentUser?.nome, currentUser?.id);
   };
 
+  const currentShift = shifts.find((s) => s.status === 'aberto') || null;
+
+  const handleOpenCashShift = async (valorAbertura: number) => {
+    if (!currentUser) return;
+    const opName = currentUser.nome || currentUser.usuario;
+    const opId = currentUser.id || '0';
+    try {
+      const created = await db.openCashShift(valorAbertura, opName, opId);
+      setShifts((prev) => {
+        const next = [created, ...prev.filter((s) => s.id !== created.id)];
+        storageService.saveCashShifts(next);
+        return next;
+      });
+    } catch (e: any) {
+      const localShift: CashShift = {
+        id: `LOCAL-SHIFT-${Date.now().toString(36)}`,
+        status: 'aberto',
+        aberto_em: new Date().toISOString(),
+        aberto_por_nome: opName,
+        aberto_por_id: opId,
+        valor_abertura: Number(valorAbertura) || 0,
+        movimentacoes: [],
+        total_sangrias: 0,
+        total_suprimentos: 0,
+        total_saidas: 0
+      };
+      setShifts((prev) => {
+        const next = [localShift, ...prev];
+        storageService.saveCashShifts(next);
+        return next;
+      });
+      console.warn('Turno salvo localmente:', e?.message);
+    }
+  };
+
+  const handleAddCashMovement = async (tipo: 'sangria' | 'suprimento', valor: number, motivo: string) => {
+    if (!currentUser || !currentShift) return;
+    const opName = currentUser.nome || currentUser.usuario;
+    const opId = currentUser.id || '0';
+    const applyLocally = (mov: CashMovement) => {
+      setShifts((prev) => {
+        const next = prev.map((sh) => {
+          if (sh.id !== currentShift.id) return sh;
+          const updatedMovs = [...(sh.movimentacoes || []).filter((m) => m.id !== mov.id), mov];
+          return {
+            ...sh,
+            movimentacoes: updatedMovs,
+            total_sangrias: updatedMovs.filter((m) => m.tipo === 'sangria').reduce((a, b) => a + (Number(b.valor) || 0), 0),
+            total_suprimentos: updatedMovs.filter((m) => m.tipo === 'suprimento').reduce((a, b) => a + (Number(b.valor) || 0), 0),
+            total_saidas: updatedMovs.filter((m) => m.tipo === 'saida').reduce((a, b) => a + (Number(b.valor) || 0), 0)
+          };
+        });
+        storageService.saveCashShifts(next);
+        return next;
+      });
+    };
+
+    if (currentShift.id.startsWith('LOCAL-')) {
+      applyLocally({
+        id: `LOCAL-MOV-${Date.now().toString(36)}`,
+        tipo,
+        valor,
+        motivo: motivo.trim() || (tipo === 'sangria' ? 'Retirada de dinheiro (Sangria)' : 'Reforço de troco (Suprimento)'),
+        data: new Date().toISOString(),
+        operador_nome: opName,
+        operador_id: opId
+      });
+      return;
+    }
+
+    try {
+      const mov = await db.addCashMovement(currentShift.id, tipo, valor, motivo, opName, opId);
+      applyLocally(mov);
+    } catch (e: any) {
+      applyLocally({
+        id: `LOCAL-MOV-${Date.now().toString(36)}`,
+        tipo,
+        valor,
+        motivo: motivo.trim() || (tipo === 'sangria' ? 'Retirada de dinheiro (Sangria)' : 'Reforço de troco (Suprimento)'),
+        data: new Date().toISOString(),
+        operador_nome: opName,
+        operador_id: opId
+      });
+      console.warn('Movimentação salva localmente:', e?.message);
+    }
+  };
+
+  const handleRemoveCashMovement = async (shiftId: string, movementId: string) => {
+    if (!currentUser) return;
+    const opName = currentUser.nome || currentUser.usuario;
+    const opId = currentUser.id || '0';
+
+    setShifts((prev) => {
+      const next = prev.map((sh) => {
+        if (sh.id !== shiftId) return sh;
+        const updatedMovs = (sh.movimentacoes || []).filter((m) => m.id !== movementId);
+        return {
+          ...sh,
+          movimentacoes: updatedMovs,
+          total_sangrias: updatedMovs.filter((m) => m.tipo === 'sangria').reduce((a, b) => a + (Number(b.valor) || 0), 0),
+          total_suprimentos: updatedMovs.filter((m) => m.tipo === 'suprimento').reduce((a, b) => a + (Number(b.valor) || 0), 0),
+          total_saidas: updatedMovs.filter((m) => m.tipo === 'saida').reduce((a, b) => a + (Number(b.valor) || 0), 0)
+        };
+      });
+      storageService.saveCashShifts(next);
+      return next;
+    });
+
+    if (!shiftId.startsWith('LOCAL-')) {
+      await db.removeCashMovement(shiftId, movementId, opName, opId).catch((err) => console.warn(err));
+    }
+  };
+
+  const handleAddCashOutflow = async (data: { categoria: string; valor: number; motivo: string }) => {
+    if (!currentUser) return;
+    const opName = currentUser.nome || currentUser.usuario;
+    const opId = currentUser.id || '0';
+    const nowIso = new Date().toISOString();
+    const openShiftId = currentShift?.id || null;
+
+    const applyOutflowLocally = (outflow: CashOutflow) => {
+      setCashOutflows((prev) => {
+        const next = [outflow, ...prev.filter((o) => o.id !== outflow.id)].sort(
+          (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()
+        );
+        storageService.saveCashOutflows(next);
+        return next;
+      });
+
+      if (openShiftId) {
+        const mov: CashMovement = {
+          id: outflow.id,
+          tipo: 'saida',
+          categoria: outflow.categoria,
+          valor: outflow.valor,
+          motivo: outflow.motivo,
+          data: outflow.data,
+          operador_nome: outflow.operador_nome,
+          operador_id: outflow.operador_id
+        };
+        setShifts((prev) => {
+          const next = prev.map((sh) => {
+            if (sh.id !== openShiftId) return sh;
+            const updatedMovs = [...(sh.movimentacoes || []).filter((m) => m.id !== mov.id), mov];
+            return {
+              ...sh,
+              movimentacoes: updatedMovs,
+              total_saidas: updatedMovs.filter((m) => m.tipo === 'saida').reduce((a, b) => a + (Number(b.valor) || 0), 0)
+            };
+          });
+          storageService.saveCashShifts(next);
+          return next;
+        });
+      }
+    };
+
+    try {
+      const saved = await db.addCashOutflow({
+        categoria: data.categoria,
+        valor: data.valor,
+        motivo: data.motivo,
+        operador_nome: opName,
+        operador_id: opId,
+        shift_id: openShiftId && !openShiftId.startsWith('LOCAL-') ? openShiftId : null,
+        data: nowIso
+      });
+      applyOutflowLocally({ ...saved, shift_id: openShiftId });
+    } catch (e: any) {
+      const localOutflow: CashOutflow = {
+        id: `LOCAL-OUT-${Date.now().toString(36)}`,
+        shift_id: openShiftId,
+        categoria: data.categoria,
+        valor: Number(data.valor) || 0,
+        motivo: data.motivo,
+        data: nowIso,
+        operador_nome: opName,
+        operador_id: opId
+      };
+      applyOutflowLocally(localOutflow);
+      console.warn('Saída salva localmente:', e?.message);
+    }
+
+    showToast(`Saída de R$ ${Number(data.valor).toFixed(2)} lançada no caixa!`, 'success');
+  };
+
+  const handleDeleteCashOutflow = async (outflow: CashOutflow) => {
+    if (!currentUser) return;
+    const opName = currentUser.nome || currentUser.usuario;
+    const opId = currentUser.id || '0';
+
+    setCashOutflows((prev) => {
+      const next = prev.filter((o) => o.id !== outflow.id);
+      storageService.saveCashOutflows(next);
+      return next;
+    });
+
+    if (outflow.shift_id) {
+      setShifts((prev) => {
+        const next = prev.map((sh) => {
+          if (sh.id !== outflow.shift_id || sh.status !== 'aberto') return sh;
+          const updatedMovs = (sh.movimentacoes || []).filter((m) => m.id !== outflow.id);
+          return {
+            ...sh,
+            movimentacoes: updatedMovs,
+            total_saidas: updatedMovs.filter((m) => m.tipo === 'saida').reduce((a, b) => a + (Number(b.valor) || 0), 0)
+          };
+        });
+        storageService.saveCashShifts(next);
+        return next;
+      });
+    }
+
+    if (!outflow.id.startsWith('LOCAL-')) {
+      await db.deleteCashOutflow(outflow, opName, opId).catch((err) => console.warn(err));
+    }
+  };
+
+  const handleCloseCashShift = async (
+    valorInformado: number,
+    valorCalculado: number,
+    totaisVendas: any,
+    obs: string
+  ) => {
+    if (!currentUser || !currentShift) return;
+    const opName = currentUser.nome || currentUser.usuario;
+    const opId = currentUser.id || '0';
+    const diferenca = Number((valorInformado - valorCalculado).toFixed(2));
+    const closedAt = new Date().toISOString();
+
+    setShifts((prev) => {
+      const next = prev.map((sh) =>
+        sh.id === currentShift.id
+          ? {
+              ...sh,
+              status: 'fechado' as const,
+              fechado_em: closedAt,
+              fechado_por_nome: opName,
+              fechado_por_id: opId,
+              valor_fechamento_informado: valorInformado,
+              valor_fechamento_calculado: valorCalculado,
+              diferenca,
+              observacoes_fechamento: obs.trim() || undefined,
+              total_vendas_dinheiro: totaisVendas.dinheiro || 0,
+              total_vendas_pix: totaisVendas.pix || 0,
+              total_vendas_debito: totaisVendas.debito || 0,
+              total_vendas_credito: totaisVendas.credito || 0,
+              total_vendas_fiado: totaisVendas.fiado || 0,
+              total_saidas: totaisVendas.saidas ?? sh.total_saidas ?? 0
+            }
+          : sh
+      );
+      storageService.saveCashShifts(next);
+      return next;
+    });
+
+    if (!currentShift.id.startsWith('LOCAL-')) {
+      await db
+        .closeCashShift(currentShift.id, valorInformado, valorCalculado, totaisVendas, obs, opName, opId)
+        .catch((err) => console.warn(err));
+    }
+  };
+
   const isReservaRoute = isCurrentRouteReserva();
 
   if (isReservaRoute) {
@@ -534,8 +820,6 @@ const AppContent: React.FC = () => {
     />
   );
 
-  const currentShift = shifts.find(s => s.status === 'aberto') || null;
-
   return (
     <>
       <Layout 
@@ -560,8 +844,10 @@ const AppContent: React.FC = () => {
             customers={customers}
             sales={sales}
             currentUser={currentUser}
+            hasOpenShift={Boolean(currentShift)}
             onCompleteSale={handleCompleteSale}
             onUpdateSaleContact={handleUpdateSaleContact}
+            onAddCashOutflow={handleAddCashOutflow}
             onOpenAdminPanel={() => setActiveTab('estoque')}
           />
         )}
@@ -569,8 +855,15 @@ const AppContent: React.FC = () => {
           <CashRegisterView 
             shifts={shifts}
             currentShift={currentShift}
+            outflows={cashOutflows}
             sales={sales}
             currentUser={currentUser}
+            onOpenShift={handleOpenCashShift}
+            onAddMovement={handleAddCashMovement}
+            onRemoveMovement={handleRemoveCashMovement}
+            onAddOutflow={handleAddCashOutflow}
+            onDeleteOutflow={handleDeleteCashOutflow}
+            onCloseShift={handleCloseCashShift}
           />
         )}
         {activeTab === 'fiado' && (

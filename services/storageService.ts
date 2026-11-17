@@ -1,4 +1,4 @@
-import { Product, Sale, SaleItem, StockMovement, User, AppSettings } from '../types';
+import { Product, Sale, SaleItem, StockMovement, User, AppSettings, CashShift, CashOutflow } from '../types';
 import { INITIAL_PRODUCTS } from '../constants';
 import { safeStorage } from '../utils/safeStorage';
 import { downloadBlobFile, getLocalDateString } from '../utils/browserUtils';
@@ -9,6 +9,8 @@ const STORAGE_KEYS = {
   STOCK_HISTORY: 'tusemm_stock_history',
   USERS: 'tusemm_users',
   SETTINGS: 'tusemm_settings',
+  CASH_SHIFTS: 'tusemm_cash_shifts',
+  CASH_OUTFLOWS: 'tusemm_cash_outflows',
   DEMO_SEEDED: 'tusemm_demo_seeded_v1'
 };
 
@@ -119,6 +121,18 @@ export const storageService = {
   },
   saveSettings: (settings: AppSettings) => {
     safeStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+  },
+  getCashShifts: (): CashShift[] => {
+    return safeParseJson<CashShift[]>(safeStorage.getItem(STORAGE_KEYS.CASH_SHIFTS), []);
+  },
+  saveCashShifts: (shifts: CashShift[]) => {
+    safeStorage.setItem(STORAGE_KEYS.CASH_SHIFTS, JSON.stringify(shifts));
+  },
+  getCashOutflows: (): CashOutflow[] => {
+    return safeParseJson<CashOutflow[]>(safeStorage.getItem(STORAGE_KEYS.CASH_OUTFLOWS), []);
+  },
+  saveCashOutflows: (outflows: CashOutflow[]) => {
+    safeStorage.setItem(STORAGE_KEYS.CASH_OUTFLOWS, JSON.stringify(outflows));
   },
 
   exportBackup: () => {

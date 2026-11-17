@@ -127,7 +127,19 @@ export interface Customer {
 
 export interface CashMovement {
   id: string;
-  tipo: 'sangria' | 'suprimento';
+  tipo: 'sangria' | 'suprimento' | 'saida';
+  categoria?: string;
+  valor: number;
+  motivo: string;
+  data: string;
+  operador_nome: string;
+  operador_id: string;
+}
+
+export interface CashOutflow {
+  id: string;
+  shift_id?: string | null;
+  categoria: string;
   valor: number;
   motivo: string;
   data: string;
@@ -157,5 +169,6 @@ export interface CashShift {
   total_vendas_fiado?: number;
   total_sangrias?: number;
   total_suprimentos?: number;
+  total_saidas?: number;
 }
 
