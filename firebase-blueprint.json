@@ -44,6 +44,8 @@
         "forma_pagamento": { "type": "string" },
         "created_at": { "type": "string" },
         "cliente_nome": { "type": "string" },
+        "tipo_pedido": { "type": "string", "enum": ["balcao", "reserva"] },
+        "status_entrega": { "type": "string", "enum": ["pendente", "parcial", "entregue"] },
         "pixInteractionId": { "type": "string" }
       },
       "required": ["status", "valor_total", "forma_pagamento", "created_at"]
@@ -56,6 +58,7 @@
         "produto_id": { "type": "string" },
         "nome": { "type": "string" },
         "quantidade": { "type": "number" },
+        "quantidade_entregue": { "type": "number" },
         "preco_unitario": { "type": "number" },
         "subtotal": { "type": "number" }
       },

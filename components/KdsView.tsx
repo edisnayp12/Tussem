@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sale, User, UserRole, PaymentMethod } from '../types';
+import { Sale, SaleItem, User, UserRole, PaymentMethod } from '../types';
 import { playOrderAlert } from '../utils/soundUtils';
 import { formatSafeDateTime } from '../utils/browserUtils';
 import { useFeedback } from './FeedbackProvider';
@@ -10,22 +10,53 @@ interface KdsViewProps {
   currentUser?: User | null;
 }
 
+const getOrderProgress = (itens?: SaleItem[]) => {
+  const list = itens || [];
+  let totalUnits = 0;
+  let deliveredUnits = 0;
+
+  list.forEach((item) => {
+    const qty = Math.max(1, Number(item.quantidade) || 1);
+    const deliv = Math.min(qty, Math.max(0, Number(item.quantidade_entregue) || 0));
+    totalUnits += qty;
+    deliveredUnits += deliv;
+  });
+
+  return {
+    totalUnits,
+    deliveredUnits,
+    remainingUnits: Math.max(0, totalUnits - deliveredUnits),
+    percent: totalUnits > 0 ? Math.round((deliveredUnits / totalUnits) * 100) : 0
+  };
+};
+
 const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) => {
-  const { showToast } = useFeedback();
+  const { showToast, confirmAction } = useFeedback();
   const isAdmin = currentUser?.perfil === UserRole.ADMIN || currentUser?.id === 'super-admin';
   const [showAll, setShowAll] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [updatingIds, setUpdatingIds] = useState<Record<string, boolean>>({});
 
   // Filtra as vendas com base nas permissões/configurações
-  const kdsSales = sales.filter(s => {
+  const kdsSales = sales.filter((s) => {
     const isReserva = s.tipo_pedido === 'reserva';
     if (!isAdmin && !showAll) return isReserva;
     if (showAll) return true;
     return isReserva;
   });
 
-  // Separa em pendentes de entrega e já entregues (recentes)
-  const pendingDeliveries = kdsSales.filter(s => s.status_entrega !== 'entregue' && s.tipo_pedido === 'reserva');
+  // Pendentes e parciais ficam na fila ativa do KDS
+  const pendingDeliveries = kdsSales.filter(
+    (s) => s.status_entrega !== 'entregue' && s.tipo_pedido === 'reserva'
+  );
+  const partialCount = pendingDeliveries.filter(
+    (s) => s.status_entrega === 'parcial' || getOrderProgress(s.itens).deliveredUnits > 0
+  ).length;
+
+  const recentDeliveredReservas = kdsSales
+    .filter((s) => s.tipo_pedido === 'reserva' && s.status_entrega === 'entregue')
+    .slice(0, 8);
+
   const prevCountRef = useRef(pendingDeliveries.length);
 
   // Alerta sonoro quando entra nova reserva
@@ -37,27 +68,125 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
     }
     prevCountRef.current = pendingDeliveries.length;
   }, [pendingDeliveries.length, soundEnabled]);
-  
+
   // Mostrar também balcão no all
-  const allOtherSales = kdsSales.filter(s => s.status_entrega === 'entregue' || s.tipo_pedido !== 'reserva');
+  const allOtherSales = kdsSales.filter(
+    (s) => s.status_entrega === 'entregue' || s.tipo_pedido !== 'reserva'
+  );
 
   const getWaitBadge = (createdAt: string) => {
-    const diffMin = Math.floor((Date.now() - new Date(createdAt).getTime()) / 60000);
+    const diffMin = Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 60000));
     if (diffMin < 10) {
       return { text: `Há ${diffMin}m`, cls: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300' };
     }
     if (diffMin < 20) {
       return { text: `Há ${diffMin}m`, cls: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300' };
     }
-    return { text: `⚠️ Há ${diffMin}m`, cls: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300 animate-pulse font-black' };
+    return {
+      text: `⚠️ Há ${diffMin}m`,
+      cls: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300 animate-pulse font-black'
+    };
   };
 
-  const handleConfirmDelivery = async (saleId: string) => {
+  const applyItemDeliveredQuantity = async (sale: Sale, itemIndex: number, nextDeliveredQty: number) => {
+    if (updatingIds[sale.id]) return;
+    const itens = sale.itens || [];
+    if (!itens[itemIndex]) return;
+
+    const targetItem = itens[itemIndex];
+    const maxQty = Math.max(1, Number(targetItem.quantidade) || 1);
+    const clampedQty = Math.min(maxQty, Math.max(0, nextDeliveredQty));
+
+    const updatedItens: SaleItem[] = itens.map((it, idx) =>
+      idx === itemIndex ? { ...it, quantidade_entregue: clampedQty } : it
+    );
+
+    const progress = getOrderProgress(updatedItens);
+    const nextStatus: 'pendente' | 'parcial' | 'entregue' =
+      progress.totalUnits > 0 && progress.deliveredUnits >= progress.totalUnits
+        ? 'entregue'
+        : progress.deliveredUnits > 0
+        ? 'parcial'
+        : 'pendente';
+
+    const logDetalhes =
+      nextStatus === 'entregue'
+        ? `Pedido de ${sale.cliente_nome || 'Cliente'} (#${sale.id.slice(-6).toUpperCase()}) 100% entregue no KDS (${progress.deliveredUnits}/${progress.totalUnits} itens).`
+        : nextStatus === 'parcial'
+        ? `Baixa parcial em ${sale.cliente_nome || 'Cliente'} (#${sale.id.slice(-6).toUpperCase()}): ${targetItem.nome} (${clampedQty}/${maxQty}) • Total ${progress.deliveredUnits}/${progress.totalUnits}.`
+        : `Item ${targetItem.nome} retornado para pendente em ${sale.cliente_nome || 'Cliente'} (#${sale.id.slice(-6).toUpperCase()}).`;
+
+    setUpdatingIds((prev) => ({ ...prev, [sale.id]: true }));
     try {
-      await onUpdateSale(saleId, { status_entrega: 'entregue' });
-      showToast('Entrega confirmada!', 'success');
+      await onUpdateSale(sale.id, {
+        itens: updatedItens,
+        status_entrega: nextStatus,
+        logDetalhes
+      });
+      if (nextStatus === 'entregue') {
+        showToast(`Pedido de ${sale.cliente_nome || 'Cliente'} 100% entregue!`, 'success');
+      } else if (nextStatus === 'parcial') {
+        showToast(
+          `Baixa parcial: ${progress.deliveredUnits}/${progress.totalUnits} itens entregues.`,
+          'info'
+        );
+      } else {
+        showToast('Item voltou para pendente.', 'info');
+      }
+    } catch (e: any) {
+      showToast('Erro ao atualizar entrega parcial: ' + (e?.message || 'Tente novamente'), 'error');
+    } finally {
+      setUpdatingIds((prev) => ({ ...prev, [sale.id]: false }));
+    }
+  };
+
+  const handleConfirmFullDelivery = async (sale: Sale) => {
+    if (updatingIds[sale.id]) return;
+    const updatedItens: SaleItem[] = (sale.itens || []).map((it) => ({
+      ...it,
+      quantidade_entregue: Math.max(1, Number(it.quantidade) || 1)
+    }));
+
+    setUpdatingIds((prev) => ({ ...prev, [sale.id]: true }));
+    try {
+      await onUpdateSale(sale.id, {
+        itens: updatedItens,
+        status_entrega: 'entregue',
+        logDetalhes: `Entrega total confirmada para ${sale.cliente_nome || 'Cliente'} (#${sale.id.slice(-6).toUpperCase()}).`
+      });
+      showToast('Entrega total confirmada!', 'success');
     } catch (e: any) {
       showToast('Erro ao confirmar entrega: ' + (e?.message || 'Tente novamente'), 'error');
+    } finally {
+      setUpdatingIds((prev) => ({ ...prev, [sale.id]: false }));
+    }
+  };
+
+  const handleReopenOrder = async (sale: Sale) => {
+    const confirmed = await confirmAction({
+      title: 'Reabrir Pedido no KDS',
+      message: `Deseja retornar o pedido de ${sale.cliente_nome || 'Cliente'} para a fila de preparo/entrega do KDS?`,
+      confirmLabel: 'Reabrir Pedido'
+    });
+    if (!confirmed) return;
+
+    const resetItens: SaleItem[] = (sale.itens || []).map((it) => ({
+      ...it,
+      quantidade_entregue: 0
+    }));
+
+    setUpdatingIds((prev) => ({ ...prev, [sale.id]: true }));
+    try {
+      await onUpdateSale(sale.id, {
+        itens: resetItens,
+        status_entrega: 'pendente',
+        logDetalhes: `Pedido de ${sale.cliente_nome || 'Cliente'} (#${sale.id.slice(-6).toUpperCase()}) reaberto no KDS.`
+      });
+      showToast('Pedido retornado para a fila pendente.', 'info');
+    } catch (e: any) {
+      showToast('Erro ao reabrir pedido: ' + (e?.message || 'Tente novamente'), 'error');
+    } finally {
+      setUpdatingIds((prev) => ({ ...prev, [sale.id]: false }));
     }
   };
 
@@ -71,14 +200,17 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500">
+    <div className="space-y-6 pb-20 animate-in fade-in duration-500">
       <div className="bg-purple-900 text-white p-6 sm:p-8 rounded-[40px] shadow-xl flex flex-col sm:flex-row justify-between sm:items-center gap-4">
         <div>
           <h2 className="text-2xl font-black uppercase tracking-tight">KDS - Cozinha e Entregas</h2>
-          <p className="opacity-60 text-[10px] font-bold uppercase mt-1">Gerenciamento de Pedidos e Reservas em Tempo Real</p>
+          <p className="opacity-75 text-[10px] font-bold uppercase mt-1">
+            Toque nos itens para dar baixa parcial ou confirme o pedido completo
+          </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
+            type="button"
             onClick={() => setSoundEnabled(!soundEnabled)}
             className={`px-3 py-2 rounded-2xl text-[10px] font-black uppercase transition-all flex items-center gap-2 border ${
               soundEnabled
@@ -92,11 +224,14 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
           {isAdmin && (
             <div className="flex items-center gap-3 bg-white/10 p-2.5 rounded-2xl">
               <span className="text-[10px] font-black uppercase">Todos</span>
-              <button 
+              <button
+                type="button"
                 onClick={() => setShowAll(!showAll)}
                 className={`w-12 h-6 rounded-full transition-colors relative ${showAll ? 'bg-green-500' : 'bg-gray-500'}`}
               >
-                <div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-all ${showAll ? 'left-7' : 'left-1'}`}></div>
+                <div
+                  className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-all ${showAll ? 'left-7' : 'left-1'}`}
+                ></div>
               </button>
             </div>
           )}
@@ -104,103 +239,312 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
       </div>
 
       <div className="space-y-4">
-        <h3 className="text-sm font-black text-purple-900 dark:text-purple-200 uppercase ml-2 border-b-2 border-purple-100 dark:border-purple-900 pb-2 inline-block">
-          Reservas Pendentes ({pendingDeliveries.length})
-        </h3>
-        
+        <div className="flex flex-wrap items-center gap-3 ml-2">
+          <h3 className="text-sm font-black text-purple-900 dark:text-purple-200 uppercase border-b-2 border-purple-100 dark:border-purple-900 pb-1.5 inline-block">
+            Reservas Pendentes ({pendingDeliveries.length})
+          </h3>
+          {partialCount > 0 && (
+            <span className="px-3 py-1 rounded-full bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 text-[10px] font-black uppercase">
+              {partialCount} {partialCount === 1 ? 'Entrega Parcial' : 'Entregas Parciais'}
+            </span>
+          )}
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {pendingDeliveries.map(sale => {
+          {pendingDeliveries.map((sale) => {
             const badge = getWaitBadge(sale.created_at);
+            const progress = getOrderProgress(sale.itens);
+            const isPartial = sale.status_entrega === 'parcial' || progress.deliveredUnits > 0;
+            const isBusy = Boolean(updatingIds[sale.id]);
+
             return (
-              <div key={sale.id} className="bg-white dark:bg-[#160e2b] p-6 rounded-3xl shadow-sm border border-orange-200 dark:border-purple-900/60 relative overflow-hidden flex flex-col">
+              <div
+                key={sale.id}
+                className={`bg-white dark:bg-[#160e2b] p-5 sm:p-6 rounded-3xl shadow-sm border-2 relative overflow-hidden flex flex-col transition-all ${
+                  isPartial
+                    ? 'border-amber-400 dark:border-amber-600/80'
+                    : 'border-orange-200 dark:border-purple-900/60'
+                }`}
+              >
                 <div className="absolute top-0 right-0 flex items-center">
                   <span className={`px-3 py-1 rounded-bl-2xl font-black text-[9px] uppercase ${badge.cls}`}>
                     {badge.text}
                   </span>
-                  <span className="bg-orange-100 dark:bg-orange-950/80 text-orange-700 dark:text-orange-300 px-3 py-1 font-black text-[9px] uppercase">
-                    Aguardando
+                  <span
+                    className={`px-3 py-1 font-black text-[9px] uppercase ${
+                      isPartial
+                        ? 'bg-amber-400 text-purple-950'
+                        : 'bg-orange-100 dark:bg-orange-950/80 text-orange-700 dark:text-orange-300'
+                    }`}
+                  >
+                    {isPartial ? `Parcial (${progress.deliveredUnits}/${progress.totalUnits})` : 'Aguardando'}
                   </span>
                 </div>
-                
-                <div className="mb-4 pr-16">
-                  <h4 className="font-black text-purple-950 dark:text-white uppercase text-lg">{sale.cliente_nome}</h4>
+
+                <div className="mb-3 pr-24">
+                  <h4 className="font-black text-purple-950 dark:text-white uppercase text-lg leading-tight">
+                    {sale.cliente_nome || 'Cliente'}
+                  </h4>
                   <p className="text-[10px] font-bold text-gray-500 dark:text-gray-400 flex items-center gap-1 mt-1">
                     <i className="fa-brands fa-whatsapp text-green-500"></i> {sale.telefone_comprador || 'Sem telefone'}
                   </p>
-                  <p className="text-[9px] font-bold text-gray-400 mt-1">{formatSafeDateTime(sale.created_at)}</p>
+                  <p className="text-[9px] font-bold text-gray-400 mt-0.5">{formatSafeDateTime(sale.created_at)}</p>
                 </div>
 
-              <div className="bg-gray-50 dark:bg-[#20143a] p-4 rounded-2xl flex-1 mb-4 border border-gray-100 dark:border-purple-900/40">
-                <ul className="space-y-2">
-                  {sale.itens?.map((item, idx) => (
-                    <li key={idx} className="flex justify-between text-xs border-b border-gray-200 dark:border-purple-900/40 last:border-0 pb-2 last:pb-0">
-                      <span className="font-bold text-gray-700 dark:text-gray-200 uppercase">{item.quantidade}x {item.nome}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              
-              <div className="flex justify-between items-center mb-4 bg-purple-50 dark:bg-purple-950/60 p-3 rounded-2xl border border-purple-100 dark:border-purple-900/40">
-                <div className="flex flex-col">
-                  <span className="text-[8px] font-black uppercase text-purple-600 dark:text-purple-300">Total</span>
-                  <span className="text-sm font-black text-purple-950 dark:text-white">R$ {sale.valor_total.toFixed(2)}</span>
-                </div>
-                <div className="flex flex-col items-end">
-                  <span className="text-[8px] font-black uppercase text-purple-600 dark:text-purple-300">Pagamento</span>
-                  <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-md mt-1 ${sale.status === 'pago' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                    {sale.forma_pagamento} - {sale.status}
-                  </span>
-                </div>
-              </div>
-
-              <div className="space-y-2 mt-auto">
-                <button 
-                  onClick={() => handleConfirmDelivery(sale.id)}
-                  className="w-full bg-green-500 hover:bg-green-600 text-white py-4 rounded-2xl font-black text-[10px] uppercase transition-all shadow-lg shadow-green-500/20"
-                >
-                  Confirmar Entrega
-                </button>
-
-                {(isAdmin || currentUser?.perfil === UserRole.KDS) && sale.status === 'pendente' && (
-                  <div className="flex gap-2">
-                    {isAdmin && sale.forma_pagamento === PaymentMethod.PIX && (
-                      <button 
-                        onClick={() => handleCobrarPix(sale.id)}
-                        className="w-full flex items-center justify-center gap-2 bg-purple-100 dark:bg-purple-900 hover:bg-purple-200 text-purple-700 dark:text-purple-100 py-3 rounded-xl font-black text-[9px] uppercase transition-all"
-                      >
-                        <i className="fa-solid fa-check"></i> Baixa PIX
-                      </button>
-                    )}
+                {/* Barra de Progresso de Entrega Parcial */}
+                <div className="mb-3">
+                  <div className="flex justify-between items-center text-[10px] font-black uppercase mb-1">
+                    <span className="text-purple-900/70 dark:text-purple-300">Progresso da Baixa</span>
+                    <span className={isPartial ? 'text-amber-600 dark:text-amber-300' : 'text-gray-400'}>
+                      {progress.deliveredUnits}/{progress.totalUnits} itens ({progress.percent}%)
+                    </span>
                   </div>
-                )}
+                  <div className="w-full h-2 bg-purple-100 dark:bg-purple-950 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        progress.percent > 0 ? 'bg-emerald-500' : 'bg-purple-300'
+                      }`}
+                      style={{ width: `${progress.percent}%` }}
+                    ></div>
+                  </div>
+                </div>
+
+                {/* Lista Interativa de Itens para Baixa Parcial */}
+                <div className="bg-gray-50 dark:bg-[#20143a] p-3 rounded-2xl flex-1 mb-4 border border-gray-100 dark:border-purple-900/40 space-y-2">
+                  {(sale.itens || []).map((item, idx) => {
+                    const qty = Math.max(1, Number(item.quantidade) || 1);
+                    const delivered = Math.min(qty, Math.max(0, Number(item.quantidade_entregue) || 0));
+                    const remaining = qty - delivered;
+                    const itemDone = remaining === 0;
+                    const itemPartial = delivered > 0 && remaining > 0;
+
+                    return (
+                      <div
+                        key={idx}
+                        className={`p-2.5 rounded-xl border transition-all flex items-center justify-between gap-2 ${
+                          itemDone
+                            ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/60'
+                            : itemPartial
+                            ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800/60'
+                            : 'bg-white dark:bg-[#160e2b] border-gray-200 dark:border-purple-900/40'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`text-xs font-black uppercase truncate ${
+                                itemDone
+                                  ? 'line-through text-emerald-800 dark:text-emerald-300 opacity-75'
+                                  : 'text-purple-950 dark:text-white'
+                              }`}
+                            >
+                              {qty}x {item.nome}
+                            </span>
+                          </div>
+                          <span
+                            className={`text-[10px] font-bold block mt-0.5 ${
+                              itemDone
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : itemPartial
+                                ? 'text-amber-700 dark:text-amber-300'
+                                : 'text-gray-400'
+                            }`}
+                          >
+                            {itemDone
+                              ? 'Entregue completo'
+                              : itemPartial
+                              ? `${delivered}/${qty} entregue • falta ${remaining}`
+                              : qty > 1
+                              ? `0/${qty} entregues`
+                              : 'Aguardando preparo'}
+                          </span>
+                        </div>
+
+                        {/* Controles de Baixa Parcial */}
+                        {qty === 1 ? (
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => applyItemDeliveredQuantity(sale, idx, itemDone ? 0 : 1)}
+                            className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase transition-all active:scale-95 shrink-0 flex items-center gap-1.5 ${
+                              itemDone
+                                ? 'bg-emerald-600 text-white shadow-sm'
+                                : 'bg-purple-100 dark:bg-purple-900/70 hover:bg-purple-900 hover:text-white text-purple-900 dark:text-purple-100'
+                            }`}
+                          >
+                            <i className={`fa-solid ${itemDone ? 'fa-check' : 'fa-hand-holding'}`}></i>
+                            <span>{itemDone ? 'Entregue' : 'Baixar'}</span>
+                          </button>
+                        ) : (
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              disabled={isBusy || delivered === 0}
+                              onClick={() => applyItemDeliveredQuantity(sale, idx, delivered - 1)}
+                              aria-label={`Diminuir entrega de ${item.nome}`}
+                              className="w-8 h-8 rounded-lg bg-white dark:bg-[#160e2b] border border-gray-200 dark:border-purple-800 text-purple-950 dark:text-white font-black text-sm disabled:opacity-35 active:scale-90"
+                            >
+                              -
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isBusy || itemDone}
+                              onClick={() => applyItemDeliveredQuantity(sale, idx, delivered + 1)}
+                              aria-label={`Entregar 1 unidade de ${item.nome}`}
+                              className="px-2.5 h-8 rounded-lg bg-purple-900 hover:bg-purple-950 text-white font-black text-[10px] uppercase disabled:opacity-35 active:scale-90"
+                            >
+                              +1
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => applyItemDeliveredQuantity(sale, idx, itemDone ? 0 : qty)}
+                              title={itemDone ? 'Desmarcar item' : `Baixar todos (${qty})`}
+                              className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs transition-all active:scale-90 ${
+                                itemDone
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-600 hover:text-white'
+                              }`}
+                            >
+                              <i className={`fa-solid ${itemDone ? 'fa-rotate-left' : 'fa-check-double'}`}></i>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="flex justify-between items-center mb-4 bg-purple-50 dark:bg-purple-950/60 p-3 rounded-2xl border border-purple-100 dark:border-purple-900/40">
+                  <div className="flex flex-col">
+                    <span className="text-[8px] font-black uppercase text-purple-600 dark:text-purple-300">Total</span>
+                    <span className="text-sm font-black text-purple-950 dark:text-white">
+                      R$ {(Number(sale.valor_total) || 0).toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <span className="text-[8px] font-black uppercase text-purple-600 dark:text-purple-300">
+                      Pagamento
+                    </span>
+                    <span
+                      className={`text-[10px] font-black uppercase px-2 py-1 rounded-md mt-1 ${
+                        sale.status === 'pago'
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-red-100 text-red-700'
+                      }`}
+                    >
+                      {sale.forma_pagamento} - {sale.status}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-2 mt-auto">
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={() => handleConfirmFullDelivery(sale)}
+                    className={`w-full py-4 rounded-2xl font-black text-[10px] uppercase transition-all shadow-lg active:scale-95 disabled:opacity-50 ${
+                      isPartial
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20'
+                        : 'bg-green-500 hover:bg-green-600 text-white shadow-green-500/20'
+                    }`}
+                  >
+                    {isPartial
+                      ? `Entregar Restante (${progress.remainingUnits} ${progress.remainingUnits === 1 ? 'item' : 'itens'})`
+                      : 'Confirmar Entrega Total'}
+                  </button>
+
+                  {(isAdmin || currentUser?.perfil === UserRole.KDS) && sale.status === 'pendente' && (
+                    <div className="flex gap-2">
+                      {isAdmin && sale.forma_pagamento === PaymentMethod.PIX && (
+                        <button
+                          type="button"
+                          onClick={() => handleCobrarPix(sale.id)}
+                          className="w-full flex items-center justify-center gap-2 bg-purple-100 dark:bg-purple-900 hover:bg-purple-200 text-purple-700 dark:text-purple-100 py-3 rounded-xl font-black text-[9px] uppercase transition-all"
+                        >
+                          <i className="fa-solid fa-check"></i> Baixa PIX
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          );
-        })}
-        {pendingDeliveries.length === 0 && (
+            );
+          })}
+          {pendingDeliveries.length === 0 && (
             <div className="col-span-full text-center py-16 bg-white dark:bg-[#160e2b] rounded-[32px] border border-gray-100 dark:border-purple-900/40 shadow-sm">
-               <i className="fa-solid fa-check-double text-5xl mb-4 text-green-400"></i>
-               <p className="text-sm font-black uppercase tracking-widest text-gray-500 dark:text-purple-300">Nenhuma reserva pendente</p>
+              <i className="fa-solid fa-check-double text-5xl mb-4 text-green-400"></i>
+              <p className="text-sm font-black uppercase tracking-widest text-gray-500 dark:text-purple-300">
+                Nenhuma reserva pendente
+              </p>
             </div>
           )}
         </div>
       </div>
 
-      {showAll && allOtherSales.length > 0 && (
-        <div className="space-y-4 pt-8">
-          <h3 className="text-sm font-black text-gray-400 uppercase ml-2 inline-block">Histórico / Outros Pedidos</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 opacity-80">
-            {allOtherSales.slice(0, 12).map(sale => (
-               <div key={sale.id} className="bg-gray-50 dark:bg-[#160e2b] p-4 rounded-3xl border border-gray-100 dark:border-purple-900/40">
-                  <div className="flex justify-between items-start mb-2">
-                    <h4 className="font-black text-gray-600 dark:text-purple-200 uppercase text-xs">{sale.cliente_nome || 'Balcão'}</h4>
-                    <span className="text-[8px] font-black bg-gray-200 dark:bg-purple-950 text-gray-500 dark:text-purple-300 px-2 py-1 rounded uppercase">
-                      {sale.tipo_pedido}
+      {/* Entregues Recentemente (permite desfazer / reabrir caso necessário) */}
+      {recentDeliveredReservas.length > 0 && (
+        <div className="space-y-3 pt-4">
+          <h3 className="text-xs font-black text-gray-500 dark:text-purple-300 uppercase ml-2">
+            Entregues Recentemente ({recentDeliveredReservas.length})
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            {recentDeliveredReservas.map((sale) => (
+              <div
+                key={sale.id}
+                className="bg-white dark:bg-[#160e2b] p-4 rounded-2xl border border-gray-100 dark:border-purple-900/40 flex flex-col justify-between gap-2"
+              >
+                <div>
+                  <div className="flex justify-between items-start gap-2">
+                    <h4 className="font-black text-purple-950 dark:text-white uppercase text-xs truncate">
+                      {sale.cliente_nome || 'Cliente'}
+                    </h4>
+                    <span className="text-[8px] font-black bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded uppercase shrink-0">
+                      Entregue
                     </span>
                   </div>
-                  <p className="text-[9px] font-bold text-gray-400 mb-2">{formatSafeDateTime(sale.created_at)}</p>
-                  <p className="text-[10px] font-black text-gray-500 dark:text-gray-300">R$ {sale.valor_total.toFixed(2)} - {sale.status}</p>
-               </div>
+                  <p className="text-[9px] font-bold text-gray-400 mt-0.5">{formatSafeDateTime(sale.created_at)}</p>
+                  <p className="text-[10px] text-gray-600 dark:text-purple-200 mt-1.5 line-clamp-2">
+                    {(sale.itens || []).map((i) => `${i.quantidade}x ${i.nome}`).join(', ')}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={Boolean(updatingIds[sale.id])}
+                  onClick={() => handleReopenOrder(sale)}
+                  className="w-full py-2 rounded-xl bg-purple-50 dark:bg-[#20143a] hover:bg-purple-100 text-purple-800 dark:text-purple-200 text-[10px] font-black uppercase transition-all"
+                >
+                  <i className="fa-solid fa-rotate-left mr-1"></i> Reabrir no KDS
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {showAll && allOtherSales.length > 0 && (
+        <div className="space-y-4 pt-4">
+          <h3 className="text-sm font-black text-gray-400 uppercase ml-2 inline-block">Histórico / Outros Pedidos</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 opacity-80">
+            {allOtherSales.slice(0, 12).map((sale) => (
+              <div
+                key={sale.id}
+                className="bg-gray-50 dark:bg-[#160e2b] p-4 rounded-3xl border border-gray-100 dark:border-purple-900/40"
+              >
+                <div className="flex justify-between items-start mb-2">
+                  <h4 className="font-black text-gray-600 dark:text-purple-200 uppercase text-xs">
+                    {sale.cliente_nome || 'Balcão'}
+                  </h4>
+                  <span className="text-[8px] font-black bg-gray-200 dark:bg-purple-950 text-gray-500 dark:text-purple-300 px-2 py-1 rounded uppercase">
+                    {sale.tipo_pedido}
+                  </span>
+                </div>
+                <p className="text-[9px] font-bold text-gray-400 mb-2">{formatSafeDateTime(sale.created_at)}</p>
+                <p className="text-[10px] font-black text-gray-500 dark:text-gray-300">
+                  R$ {(Number(sale.valor_total) || 0).toFixed(2)} - {sale.status}
+                </p>
+              </div>
             ))}
           </div>
         </div>

@@ -540,15 +540,34 @@ export const db = {
 
   async updateSale(pedidoId: string, data: any, operatorName?: string, operatorId?: string) {
     await ensureAuthReady();
-    await updateDoc(doc(dbInstance, 'sales', pedidoId), data);
-    if (data.status_entrega === 'entregue') {
+    const { logDetalhes, ...firestoreUpdates } = data || {};
+    try {
+      await updateDoc(doc(dbInstance, 'sales', pedidoId), firestoreUpdates);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `sales/${pedidoId}`);
+    }
+    if (firestoreUpdates.status_entrega === 'entregue') {
       this.logAction(
         operatorName || 'Cozinha / KDS',
         operatorId || '0',
         'Entrega Confirmada',
-        `Pedido #${pedidoId.slice(-6).toUpperCase()} marcado como entregue.`
+        logDetalhes || `Pedido #${pedidoId.slice(-6).toUpperCase()} marcado como entregue.`
       ).catch(() => {});
-    } else if (data.status === 'pago') {
+    } else if (firestoreUpdates.status_entrega === 'parcial') {
+      this.logAction(
+        operatorName || 'Cozinha / KDS',
+        operatorId || '0',
+        'Baixa Parcial (KDS)',
+        logDetalhes || `Pedido #${pedidoId.slice(-6).toUpperCase()} recebeu entrega parcial no KDS.`
+      ).catch(() => {});
+    } else if (firestoreUpdates.status_entrega === 'pendente') {
+      this.logAction(
+        operatorName || 'Cozinha / KDS',
+        operatorId || '0',
+        'Pedido Reaberto (KDS)',
+        logDetalhes || `Pedido #${pedidoId.slice(-6).toUpperCase()} retornado para fila pendente no KDS.`
+      ).catch(() => {});
+    } else if (firestoreUpdates.status === 'pago') {
       this.logAction(
         operatorName || 'Cozinha / KDS',
         operatorId || '0',

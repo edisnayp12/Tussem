@@ -68,6 +68,7 @@ export interface SaleItem {
   produto_id: string;
   nome?: string; // Virtual para UI
   quantidade: number;
+  quantidade_entregue?: number;
   preco_unitario: number;
   preco_custo?: number;
   subtotal: number;
@@ -89,7 +90,7 @@ export interface Sale {
   cliente_nome?: string; // Virtual para UI
   numero_venda?: number; 
   tipo_pedido?: 'balcao' | 'reserva';
-  status_entrega?: 'pendente' | 'entregue';
+  status_entrega?: 'pendente' | 'parcial' | 'entregue';
   telefone_comprador?: string;
 }
 

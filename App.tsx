@@ -507,6 +507,25 @@ const AppContent: React.FC = () => {
     await db.updateSaleContact(saleId, telefone, cliente_nome, currentUser?.nome, currentUser?.id);
   };
 
+  const handleUpdateSale = async (saleId: string, data: any) => {
+    const { logDetalhes, ...saleUpdates } = data || {};
+    setSales((prev) => {
+      const next = prev.map((s) => (s.id === saleId ? { ...s, ...saleUpdates } : s));
+      storageService.saveSales(next);
+      setFiados(computePendingFiados(next));
+      return next;
+    });
+
+    if (!saleId.startsWith('LOCAL-')) {
+      await db.updateSale(
+        saleId,
+        { ...saleUpdates, ...(logDetalhes ? { logDetalhes } : {}) },
+        currentUser?.nome,
+        currentUser?.id
+      );
+    }
+  };
+
   const currentShift = shifts.find((s) => s.status === 'aberto') || null;
 
   const handleOpenCashShift = async (valorAbertura: number) => {
@@ -942,7 +961,7 @@ const AppContent: React.FC = () => {
             onUpdateSaleContact={handleUpdateSaleContact}
           />
         )}
-        {activeTab === 'kds' && <KdsView sales={sales} onUpdateSale={async (id, data) => await db.updateSale(id, data, currentUser?.nome, currentUser?.id)} currentUser={currentUser} />}
+        {activeTab === 'kds' && <KdsView sales={sales} onUpdateSale={handleUpdateSale} currentUser={currentUser} />}
         {activeTab === 'logs' && <LogView logs={logs} />}
         {activeTab === 'config' && (
           <SettingsView 
