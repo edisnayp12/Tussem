@@ -577,6 +577,87 @@ export const db = {
     }
   },
 
+  async finalizeKdsOrder(
+    pedidoId: string,
+    payload: {
+      itens: SaleItem[];
+      restoreStock: boolean;
+      valor_total: number;
+      valor_original?: number;
+      status: 'pago' | 'pendente' | 'cancelado';
+      forma_pagamento?: PaymentMethod;
+      forma_pagamento_original?: PaymentMethod;
+      possui_nao_retirado: boolean;
+      motivo_nao_retirado?: string;
+      logDetalhes?: string;
+    },
+    operatorName?: string,
+    operatorId?: string
+  ) {
+    await ensureAuthReady();
+    const batch = writeBatch(dbInstance);
+    const saleRef = doc(dbInstance, 'sales', pedidoId);
+
+    const saleUpdates: any = {
+      itens: payload.itens,
+      status_entrega: 'entregue',
+      possui_nao_retirado: payload.possui_nao_retirado,
+      valor_total: Number(payload.valor_total) || 0,
+      status: payload.status
+    };
+
+    if (payload.valor_original !== undefined) {
+      saleUpdates.valor_original = Number(payload.valor_original) || 0;
+    }
+    if (payload.forma_pagamento) {
+      saleUpdates.forma_pagamento = payload.forma_pagamento;
+    }
+    if (payload.forma_pagamento_original) {
+      saleUpdates.forma_pagamento_original = payload.forma_pagamento_original;
+    }
+    if (payload.motivo_nao_retirado && payload.motivo_nao_retirado.trim()) {
+      saleUpdates.motivo_nao_retirado = payload.motivo_nao_retirado.trim();
+    }
+
+    batch.update(saleRef, saleUpdates);
+
+    if (payload.restoreStock) {
+      const restoreMap: Record<string, number> = {};
+      (payload.itens || []).forEach((it) => {
+        const unclaimed = Math.max(0, Number(it.quantidade_nao_retirada) || 0);
+        if (it.produto_id && unclaimed > 0) {
+          restoreMap[it.produto_id] = (restoreMap[it.produto_id] || 0) + unclaimed;
+        }
+      });
+
+      for (const [productId, restoreQty] of Object.entries(restoreMap)) {
+        const pRef = doc(dbInstance, 'products', productId);
+        try {
+          const pSnap = await getDoc(pRef);
+          if (pSnap.exists()) {
+            const currentEst = Number(pSnap.data()?.estoque) || 0;
+            batch.update(pRef, { estoque: currentEst + restoreQty });
+          }
+        } catch {
+          batch.update(pRef, { estoque: increment(restoreQty) });
+        }
+      }
+    }
+
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `sales/${pedidoId}`);
+    }
+
+    this.logAction(
+      operatorName || 'Cozinha / KDS',
+      operatorId || '0',
+      payload.possui_nao_retirado ? 'KDS Finalizado (Não Retirado)' : 'Entrega Confirmada',
+      payload.logDetalhes || `Pedido #${pedidoId.slice(-6).toUpperCase()} finalizado no KDS.`
+    ).catch(() => {});
+  },
+
   async updateSaleContact(
     saleId: string,
     telefone: string,

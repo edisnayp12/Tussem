@@ -4,9 +4,23 @@ import { playOrderAlert } from '../utils/soundUtils';
 import { formatSafeDateTime } from '../utils/browserUtils';
 import { useFeedback } from './FeedbackProvider';
 
+export interface FinalizeKdsPayload {
+  itens: SaleItem[];
+  restoreStock: boolean;
+  valor_total: number;
+  valor_original?: number;
+  status: 'pago' | 'pendente' | 'cancelado';
+  forma_pagamento?: PaymentMethod;
+  forma_pagamento_original?: PaymentMethod;
+  possui_nao_retirado: boolean;
+  motivo_nao_retirado?: string;
+  logDetalhes?: string;
+}
+
 interface KdsViewProps {
   sales: Sale[];
   onUpdateSale: (id: string, data: any) => Promise<void>;
+  onFinalizeWithUnclaimed?: (saleId: string, payload: FinalizeKdsPayload) => Promise<void>;
   currentUser?: User | null;
 }
 
@@ -30,12 +44,31 @@ const getOrderProgress = (itens?: SaleItem[]) => {
   };
 };
 
-const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) => {
+const QUICK_UNCLAIMED_REASONS = [
+  'Cliente não compareceu',
+  'Desistência no balcão',
+  'Produto indisponível'
+];
+
+const KdsView: React.FC<KdsViewProps> = ({
+  sales,
+  onUpdateSale,
+  onFinalizeWithUnclaimed,
+  currentUser
+}) => {
   const { showToast, confirmAction } = useFeedback();
   const isAdmin = currentUser?.perfil === UserRole.ADMIN || currentUser?.id === 'super-admin';
   const [showAll, setShowAll] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [updatingIds, setUpdatingIds] = useState<Record<string, boolean>>({});
+
+  // Estados do Modal "Finalizar com Produto Não Retirado"
+  const [unclaimedModalSale, setUnclaimedModalSale] = useState<Sale | null>(null);
+  const [draftDeliveredMap, setDraftDeliveredMap] = useState<Record<number, number>>({});
+  const [restoreStockOnUnclaimed, setRestoreStockOnUnclaimed] = useState(true);
+  const [deductValueOnUnclaimed, setDeductValueOnUnclaimed] = useState(true);
+  const [unclaimedReason, setUnclaimedReason] = useState('');
+  const [isSubmittingUnclaimed, setIsSubmittingUnclaimed] = useState(false);
 
   // Filtra as vendas com base nas permissões/configurações
   const kdsSales = sales.filter((s) => {
@@ -47,7 +80,7 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
 
   // Pendentes e parciais ficam na fila ativa do KDS
   const pendingDeliveries = kdsSales.filter(
-    (s) => s.status_entrega !== 'entregue' && s.tipo_pedido === 'reserva'
+    (s) => s.status_entrega !== 'entregue' && s.tipo_pedido === 'reserva' && s.status !== 'cancelado'
   );
   const partialCount = pendingDeliveries.filter(
     (s) => s.status_entrega === 'parcial' || getOrderProgress(s.itens).deliveredUnits > 0
@@ -98,7 +131,9 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
     const clampedQty = Math.min(maxQty, Math.max(0, nextDeliveredQty));
 
     const updatedItens: SaleItem[] = itens.map((it, idx) =>
-      idx === itemIndex ? { ...it, quantidade_entregue: clampedQty } : it
+      idx === itemIndex
+        ? { ...it, quantidade_entregue: clampedQty, quantidade_nao_retirada: 0 }
+        : it
     );
 
     const progress = getOrderProgress(updatedItens);
@@ -144,7 +179,8 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
     if (updatingIds[sale.id]) return;
     const updatedItens: SaleItem[] = (sale.itens || []).map((it) => ({
       ...it,
-      quantidade_entregue: Math.max(1, Number(it.quantidade) || 1)
+      quantidade_entregue: Math.max(1, Number(it.quantidade) || 1),
+      quantidade_nao_retirada: 0
     }));
 
     setUpdatingIds((prev) => ({ ...prev, [sale.id]: true }));
@@ -152,6 +188,7 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
       await onUpdateSale(sale.id, {
         itens: updatedItens,
         status_entrega: 'entregue',
+        possui_nao_retirado: false,
         logDetalhes: `Entrega total confirmada para ${sale.cliente_nome || 'Cliente'} (#${sale.id.slice(-6).toUpperCase()}).`
       });
       showToast('Entrega total confirmada!', 'success');
@@ -162,24 +199,161 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
     }
   };
 
+  const openUnclaimedModal = (sale: Sale) => {
+    const initialMap: Record<number, number> = {};
+    (sale.itens || []).forEach((it, idx) => {
+      const qty = Math.max(1, Number(it.quantidade) || 1);
+      const deliv = Math.min(qty, Math.max(0, Number(it.quantidade_entregue) || 0));
+      initialMap[idx] = deliv;
+    });
+    setDraftDeliveredMap(initialMap);
+    setRestoreStockOnUnclaimed(true);
+    setDeductValueOnUnclaimed(sale.status === 'pendente');
+    setUnclaimedReason('');
+    setUnclaimedModalSale(sale);
+  };
+
+  const handleConfirmUnclaimedFinalize = async () => {
+    if (!unclaimedModalSale || isSubmittingUnclaimed) return;
+    const itens = unclaimedModalSale.itens || [];
+
+    const finalizedItens: SaleItem[] = itens.map((it, idx) => {
+      const qty = Math.max(1, Number(it.quantidade) || 1);
+      const delivered = Math.min(qty, Math.max(0, Number(draftDeliveredMap[idx] ?? it.quantidade_entregue ?? 0)));
+      const naoRetirada = Math.max(0, qty - delivered);
+      return {
+        ...it,
+        quantidade_entregue: delivered,
+        quantidade_nao_retirada: naoRetirada
+      };
+    });
+
+    const totalUnclaimed = finalizedItens.reduce((acc, it) => acc + (Number(it.quantidade_nao_retirada) || 0), 0);
+    if (totalUnclaimed === 0) {
+      setUnclaimedModalSale(null);
+      await handleConfirmFullDelivery(unclaimedModalSale);
+      return;
+    }
+
+    const originalTotal = Number(unclaimedModalSale.valor_original ?? unclaimedModalSale.valor_total) || 0;
+    const deliveredValue = Number(
+      finalizedItens
+        .reduce((acc, it) => acc + (Number(it.preco_unitario) || 0) * (Number(it.quantidade_entregue) || 0), 0)
+        .toFixed(2)
+    );
+    const isPendingOrder = unclaimedModalSale.status === 'pendente';
+    const nextTotal = deductValueOnUnclaimed ? deliveredValue : Number(unclaimedModalSale.valor_total) || 0;
+    const nextStatus: 'pago' | 'pendente' | 'cancelado' =
+      deductValueOnUnclaimed && nextTotal <= 0 && isPendingOrder
+        ? 'cancelado'
+        : unclaimedModalSale.status;
+
+    const shouldSendToFiado = isPendingOrder && nextStatus === 'pendente' && nextTotal > 0;
+    const nextFormaPagamento = shouldSendToFiado ? PaymentMethod.FIADO : unclaimedModalSale.forma_pagamento;
+    const originalFormaPagamento =
+      shouldSendToFiado && unclaimedModalSale.forma_pagamento !== PaymentMethod.FIADO
+        ? unclaimedModalSale.forma_pagamento_original || unclaimedModalSale.forma_pagamento
+        : unclaimedModalSale.forma_pagamento_original;
+
+    const unclaimedSummary = finalizedItens
+      .filter((it) => (it.quantidade_nao_retirada || 0) > 0)
+      .map((it) => `${it.quantidade_nao_retirada}x ${it.nome}`)
+      .join(', ');
+
+    const logDetalhes = `KDS finalizado c/ não retirado para ${unclaimedModalSale.cliente_nome || 'Cliente'} (#${unclaimedModalSale.id
+      .slice(-6)
+      .toUpperCase()}): Não retirado [${unclaimedSummary}]${
+      restoreStockOnUnclaimed ? ' • Estoque devolvido' : ''
+    }${deductValueOnUnclaimed ? ` • Cobrado somente retirado: R$ ${nextTotal.toFixed(2)}` : ''}${
+      shouldSendToFiado ? ' • Enviado ao Fiado' : ''
+    }${unclaimedReason.trim() ? ` • Motivo: ${unclaimedReason.trim()}` : ''}.`;
+
+    const payload: FinalizeKdsPayload = {
+      itens: finalizedItens,
+      restoreStock: restoreStockOnUnclaimed,
+      valor_total: nextTotal,
+      valor_original: originalTotal,
+      status: nextStatus,
+      forma_pagamento: nextFormaPagamento,
+      ...(originalFormaPagamento ? { forma_pagamento_original: originalFormaPagamento } : {}),
+      possui_nao_retirado: true,
+      ...(unclaimedReason.trim() ? { motivo_nao_retirado: unclaimedReason.trim() } : {}),
+      logDetalhes
+    };
+
+    setIsSubmittingUnclaimed(true);
+    setUpdatingIds((prev) => ({ ...prev, [unclaimedModalSale.id]: true }));
+    try {
+      if (onFinalizeWithUnclaimed) {
+        await onFinalizeWithUnclaimed(unclaimedModalSale.id, payload);
+      } else {
+        await onUpdateSale(unclaimedModalSale.id, {
+          itens: payload.itens,
+          status_entrega: 'entregue',
+          possui_nao_retirado: true,
+          valor_total: payload.valor_total,
+          valor_original: payload.valor_original,
+          status: payload.status,
+          forma_pagamento: payload.forma_pagamento,
+          ...(payload.forma_pagamento_original ? { forma_pagamento_original: payload.forma_pagamento_original } : {}),
+          ...(payload.motivo_nao_retirado ? { motivo_nao_retirado: payload.motivo_nao_retirado } : {}),
+          logDetalhes
+        });
+      }
+
+      showToast(
+        shouldSendToFiado
+          ? `Finalizado! Enviado ao Fiado cobrando somente R$ ${nextTotal.toFixed(2)} retirado.`
+          : nextStatus === 'cancelado'
+          ? 'Pedido encerrado como não retirado (R$ 0,00).'
+          : `Pedido finalizado com ${totalUnclaimed} ${totalUnclaimed === 1 ? 'item não retirado' : 'itens não retirados'}!`,
+        'success'
+      );
+      setUnclaimedModalSale(null);
+    } catch (e: any) {
+      showToast('Erro ao finalizar pedido no KDS: ' + (e?.message || 'Tente novamente'), 'error');
+    } finally {
+      setIsSubmittingUnclaimed(false);
+      setUpdatingIds((prev) => ({ ...prev, [unclaimedModalSale.id]: false }));
+    }
+  };
+
   const handleReopenOrder = async (sale: Sale) => {
+    const hadUnclaimed = Boolean(
+      sale.possui_nao_retirado || (sale.itens || []).some((it) => (it.quantidade_nao_retirada || 0) > 0)
+    );
     const confirmed = await confirmAction({
       title: 'Reabrir Pedido no KDS',
-      message: `Deseja retornar o pedido de ${sale.cliente_nome || 'Cliente'} para a fila de preparo/entrega do KDS?`,
+      message: hadUnclaimed
+        ? `Deseja retornar o pedido de ${sale.cliente_nome || 'Cliente'} para a fila do KDS? O valor original será restaurado (lembre-se de conferir o estoque caso tenha sido devolvido).`
+        : `Deseja retornar o pedido de ${sale.cliente_nome || 'Cliente'} para a fila de preparo/entrega do KDS?`,
       confirmLabel: 'Reabrir Pedido'
     });
     if (!confirmed) return;
 
     const resetItens: SaleItem[] = (sale.itens || []).map((it) => ({
       ...it,
-      quantidade_entregue: 0
+      quantidade_entregue: 0,
+      quantidade_nao_retirada: 0
     }));
+
+    const restoredTotal =
+      sale.valor_original !== undefined && sale.valor_original > sale.valor_total
+        ? sale.valor_original
+        : sale.valor_total;
+    const restoredStatus: 'pago' | 'pendente' | 'cancelado' =
+      sale.status === 'cancelado' ? 'pendente' : sale.status;
 
     setUpdatingIds((prev) => ({ ...prev, [sale.id]: true }));
     try {
       await onUpdateSale(sale.id, {
         itens: resetItens,
         status_entrega: 'pendente',
+        possui_nao_retirado: false,
+        motivo_nao_retirado: '',
+        valor_total: restoredTotal,
+        status: restoredStatus,
+        ...(sale.forma_pagamento_original ? { forma_pagamento: sale.forma_pagamento_original } : {}),
         logDetalhes: `Pedido de ${sale.cliente_nome || 'Cliente'} (#${sale.id.slice(-6).toUpperCase()}) reaberto no KDS.`
       });
       showToast('Pedido retornado para a fila pendente.', 'info');
@@ -199,13 +373,44 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
     }
   };
 
+  // Totais calculados ao vivo para o modal de não retirado
+  const unclaimedSummaryStats = React.useMemo(() => {
+    if (!unclaimedModalSale) {
+      return { deliveredUnits: 0, unclaimedUnits: 0, deliveredValue: 0, unclaimedValue: 0, totalOriginal: 0 };
+    }
+    let deliveredUnits = 0;
+    let unclaimedUnits = 0;
+    let deliveredValue = 0;
+    let unclaimedValue = 0;
+
+    (unclaimedModalSale.itens || []).forEach((it, idx) => {
+      const qty = Math.max(1, Number(it.quantidade) || 1);
+      const delivered = Math.min(qty, Math.max(0, Number(draftDeliveredMap[idx] ?? 0)));
+      const unclaimed = Math.max(0, qty - delivered);
+      const unitPrice = Number(it.preco_unitario) || 0;
+
+      deliveredUnits += delivered;
+      unclaimedUnits += unclaimed;
+      deliveredValue += delivered * unitPrice;
+      unclaimedValue += unclaimed * unitPrice;
+    });
+
+    return {
+      deliveredUnits,
+      unclaimedUnits,
+      deliveredValue: Number(deliveredValue.toFixed(2)),
+      unclaimedValue: Number(unclaimedValue.toFixed(2)),
+      totalOriginal: Number(unclaimedModalSale.valor_original ?? unclaimedModalSale.valor_total) || 0
+    };
+  }, [unclaimedModalSale, draftDeliveredMap]);
+
   return (
     <div className="space-y-6 pb-20 animate-in fade-in duration-500">
       <div className="bg-purple-900 text-white p-6 sm:p-8 rounded-[40px] shadow-xl flex flex-col sm:flex-row justify-between sm:items-center gap-4">
         <div>
           <h2 className="text-2xl font-black uppercase tracking-tight">KDS - Cozinha e Entregas</h2>
           <p className="opacity-75 text-[10px] font-bold uppercase mt-1">
-            Toque nos itens para dar baixa parcial ou confirme o pedido completo
+            Dê baixa parcial por item, entregue tudo ou finalize com produto não retirado
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -454,6 +659,22 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
                       : 'Confirmar Entrega Total'}
                   </button>
 
+                  {progress.remainingUnits > 0 && (
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => openUnclaimedModal(sale)}
+                      className="w-full py-3 rounded-2xl font-black text-[10px] uppercase bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/70 transition-all active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      <i className="fa-solid fa-box-open"></i>
+                      <span>
+                        {progress.deliveredUnits > 0
+                          ? `Finalizar Só Retirado → Fiado (${progress.remainingUnits} não ret.)`
+                          : `Finalizar c/ Não Retirado (${progress.remainingUnits} un.)`}
+                      </span>
+                    </button>
+                  )}
+
                   {(isAdmin || currentUser?.perfil === UserRole.KDS) && sale.status === 'pendente' && (
                     <div className="flex gap-2">
                       {isAdmin && sale.forma_pagamento === PaymentMethod.PIX && (
@@ -486,39 +707,74 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
       {recentDeliveredReservas.length > 0 && (
         <div className="space-y-3 pt-4">
           <h3 className="text-xs font-black text-gray-500 dark:text-purple-300 uppercase ml-2">
-            Entregues Recentemente ({recentDeliveredReservas.length})
+            Finalizados Recentemente ({recentDeliveredReservas.length})
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-            {recentDeliveredReservas.map((sale) => (
-              <div
-                key={sale.id}
-                className="bg-white dark:bg-[#160e2b] p-4 rounded-2xl border border-gray-100 dark:border-purple-900/40 flex flex-col justify-between gap-2"
-              >
-                <div>
-                  <div className="flex justify-between items-start gap-2">
-                    <h4 className="font-black text-purple-950 dark:text-white uppercase text-xs truncate">
-                      {sale.cliente_nome || 'Cliente'}
-                    </h4>
-                    <span className="text-[8px] font-black bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded uppercase shrink-0">
-                      Entregue
-                    </span>
-                  </div>
-                  <p className="text-[9px] font-bold text-gray-400 mt-0.5">{formatSafeDateTime(sale.created_at)}</p>
-                  <p className="text-[10px] text-gray-600 dark:text-purple-200 mt-1.5 line-clamp-2">
-                    {(sale.itens || []).map((i) => `${i.quantidade}x ${i.nome}`).join(', ')}
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  disabled={Boolean(updatingIds[sale.id])}
-                  onClick={() => handleReopenOrder(sale)}
-                  className="w-full py-2 rounded-xl bg-purple-50 dark:bg-[#20143a] hover:bg-purple-100 text-purple-800 dark:text-purple-200 text-[10px] font-black uppercase transition-all"
+            {recentDeliveredReservas.map((sale) => {
+              const hasUnclaimed = Boolean(
+                sale.possui_nao_retirado || (sale.itens || []).some((it) => (it.quantidade_nao_retirada || 0) > 0)
+              );
+              return (
+                <div
+                  key={sale.id}
+                  className={`bg-white dark:bg-[#160e2b] p-4 rounded-2xl border flex flex-col justify-between gap-2 ${
+                    hasUnclaimed
+                      ? 'border-rose-200 dark:border-rose-900/50'
+                      : 'border-gray-100 dark:border-purple-900/40'
+                  }`}
                 >
-                  <i className="fa-solid fa-rotate-left mr-1"></i> Reabrir no KDS
-                </button>
-              </div>
-            ))}
+                  <div>
+                    <div className="flex justify-between items-start gap-2">
+                      <h4 className="font-black text-purple-950 dark:text-white uppercase text-xs truncate">
+                        {sale.cliente_nome || 'Cliente'}
+                      </h4>
+                      <span
+                        className={`text-[8px] font-black px-2 py-0.5 rounded uppercase shrink-0 ${
+                          hasUnclaimed
+                            ? 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300'
+                            : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
+                        }`}
+                      >
+                        {hasUnclaimed ? 'c/ Não Retirado' : 'Entregue'}
+                      </span>
+                    </div>
+                    <p className="text-[9px] font-bold text-gray-400 mt-0.5">{formatSafeDateTime(sale.created_at)}</p>
+                    <div className="mt-2 space-y-1">
+                      {(sale.itens || []).map((it, idx) => {
+                        const qty = Math.max(1, Number(it.quantidade) || 1);
+                        const unret = Math.max(0, Number(it.quantidade_nao_retirada) || 0);
+                        const deliv = Math.max(0, qty - unret);
+                        return (
+                          <div key={idx} className="text-[10px] flex justify-between items-center gap-1">
+                            <span className="text-gray-700 dark:text-purple-200 font-bold truncate">
+                              {qty}x {it.nome}
+                            </span>
+                            {unret > 0 ? (
+                              <span className="text-[9px] font-black text-rose-600 dark:text-rose-400 shrink-0">
+                                {deliv > 0 ? `${deliv} ent. / ` : ''}{unret} não ret.
+                              </span>
+                            ) : (
+                              <span className="text-[9px] font-bold text-emerald-600 dark:text-emerald-400 shrink-0">
+                                OK
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={Boolean(updatingIds[sale.id])}
+                    onClick={() => handleReopenOrder(sale)}
+                    className="w-full py-2 rounded-xl bg-purple-50 dark:bg-[#20143a] hover:bg-purple-100 text-purple-800 dark:text-purple-200 text-[10px] font-black uppercase transition-all"
+                  >
+                    <i className="fa-solid fa-rotate-left mr-1"></i> Reabrir no KDS
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -546,6 +802,250 @@ const KdsView: React.FC<KdsViewProps> = ({ sales, onUpdateSale, currentUser }) =
                 </p>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL: FINALIZAR PEDIDO KDS COM PRODUTO NÃO RETIRADO           */}
+      {/* ============================================================== */}
+      {unclaimedModalSale && (
+        <div
+          className="fixed inset-0 bg-black/80 z-[130] flex items-center justify-center p-3 sm:p-4 backdrop-blur-sm overflow-y-auto animate-in fade-in"
+          onClick={() => !isSubmittingUnclaimed && setUnclaimedModalSale(null)}
+        >
+          <div
+            className="bg-white dark:bg-[#160e2b] rounded-[36px] p-5 sm:p-7 w-full max-w-lg shadow-2xl my-auto border border-purple-100 dark:border-purple-900/40 max-h-[92vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 pb-4 border-b border-gray-100 dark:border-purple-900/30">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-300 flex items-center justify-center text-lg shrink-0">
+                  <i className="fa-solid fa-box-open"></i>
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-purple-950 dark:text-white uppercase leading-tight">
+                    Finalizar c/ Não Retirado
+                  </h3>
+                  <p className="text-[11px] font-bold text-gray-500 dark:text-purple-300 uppercase mt-0.5">
+                    {unclaimedModalSale.cliente_nome || 'Cliente'} • {unclaimedModalSale.forma_pagamento}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isSubmittingUnclaimed}
+                onClick={() => setUnclaimedModalSale(null)}
+                className="w-9 h-9 rounded-full bg-gray-100 dark:bg-purple-950 text-gray-500 hover:text-gray-800 dark:text-purple-300 flex items-center justify-center"
+              >
+                <i className="fa-solid fa-xmark text-sm"></i>
+              </button>
+            </div>
+
+            <div className="overflow-y-auto py-4 space-y-4 flex-1 pr-1">
+              <p className="text-xs font-semibold text-gray-600 dark:text-purple-200 leading-relaxed">
+                Confira abaixo o que foi <strong>entregue</strong> e o que ficará marcado como <strong>não retirado</strong> antes de encerrar este pedido no KDS:
+              </p>
+
+              {/* Ajuste por item (Entregue vs Não Retirado) */}
+              <div className="space-y-2">
+                {(unclaimedModalSale.itens || []).map((item, idx) => {
+                  const qty = Math.max(1, Number(item.quantidade) || 1);
+                  const delivered = Math.min(qty, Math.max(0, Number(draftDeliveredMap[idx] ?? 0)));
+                  const unclaimed = Math.max(0, qty - delivered);
+
+                  return (
+                    <div
+                      key={idx}
+                      className={`p-3 rounded-2xl border flex items-center justify-between gap-3 ${
+                        unclaimed > 0
+                          ? 'bg-rose-50/70 dark:bg-rose-950/30 border-rose-200 dark:border-rose-900/50'
+                          : 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/50'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="font-black text-xs text-purple-950 dark:text-white uppercase truncate">
+                          {qty}x {item.nome}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2 mt-1 text-[10px] font-bold">
+                          <span className="text-emerald-700 dark:text-emerald-400">
+                            Entregue: {delivered}
+                          </span>
+                          <span className="text-gray-300">•</span>
+                          <span className={unclaimed > 0 ? 'text-rose-600 dark:text-rose-400 font-black' : 'text-gray-400'}>
+                            Não retirado: {unclaimed}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          disabled={delivered === 0}
+                          onClick={() =>
+                            setDraftDeliveredMap((prev) => ({ ...prev, [idx]: Math.max(0, delivered - 1) }))
+                          }
+                          className="w-8 h-8 rounded-xl bg-white dark:bg-[#160e2b] border border-gray-200 dark:border-purple-800 font-black text-sm text-purple-950 dark:text-white disabled:opacity-35"
+                          title="Diminuir entregues"
+                        >
+                          -
+                        </button>
+                        <span className="w-6 text-center text-xs font-black text-purple-950 dark:text-white">
+                          {delivered}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={delivered >= qty}
+                          onClick={() =>
+                            setDraftDeliveredMap((prev) => ({ ...prev, [idx]: Math.min(qty, delivered + 1) }))
+                          }
+                          className="w-8 h-8 rounded-xl bg-purple-900 text-white font-black text-sm disabled:opacity-35"
+                          title="Aumentar entregues"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Resumo Financeiro */}
+              <div className="grid grid-cols-2 gap-2.5">
+                <div className="bg-emerald-50 dark:bg-emerald-950/50 p-3 rounded-2xl border border-emerald-200 dark:border-emerald-900/40">
+                  <span className="text-[9px] font-black uppercase text-emerald-700 dark:text-emerald-300 block">
+                    Retirados — Valor Cobrado ({unclaimedSummaryStats.deliveredUnits} un.)
+                  </span>
+                  <span className="text-base font-black text-emerald-700 dark:text-emerald-300">
+                    R$ {unclaimedSummaryStats.deliveredValue.toFixed(2)}
+                  </span>
+                </div>
+                <div className="bg-rose-50 dark:bg-rose-950/50 p-3 rounded-2xl border border-rose-200 dark:border-rose-900/40">
+                  <span className="text-[9px] font-black uppercase text-rose-700 dark:text-rose-300 block">
+                    Não Retirados — Abatido ({unclaimedSummaryStats.unclaimedUnits} un.)
+                  </span>
+                  <span className="text-base font-black text-rose-600 dark:text-rose-300">
+                    - R$ {unclaimedSummaryStats.unclaimedValue.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              {unclaimedModalSale.status === 'pendente' && deductValueOnUnclaimed && (
+                <div className="bg-purple-50 dark:bg-purple-950/60 border border-purple-200 dark:border-purple-800 rounded-2xl p-3 text-[11px] font-bold text-purple-900 dark:text-purple-200 flex items-start gap-2.5">
+                  <i className="fa-solid fa-receipt text-purple-600 dark:text-purple-300 mt-0.5"></i>
+                  <div>
+                    {unclaimedSummaryStats.deliveredValue > 0 ? (
+                      <>
+                        <span>
+                          Será lançado no <strong>Fiado</strong> cobrando somente{' '}
+                          <strong>R$ {unclaimedSummaryStats.deliveredValue.toFixed(2)}</strong> (em vez de R${' '}
+                          {unclaimedSummaryStats.totalOriginal.toFixed(2)}), com indicação de reserva não retirada por completo.
+                        </span>
+                      </>
+                    ) : (
+                      <span>
+                        Como nenhum item foi retirado, o pedido será encerrado como <strong>Cancelado (R$ 0,00)</strong> sem gerar cobrança no fiado.
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Opções de Estoque e Valor */}
+              <div className="bg-gray-50 dark:bg-[#20143a] p-4 rounded-2xl border border-gray-100 dark:border-purple-900/30 space-y-3">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={restoreStockOnUnclaimed}
+                    onChange={(e) => setRestoreStockOnUnclaimed(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 accent-purple-900 rounded"
+                  />
+                  <div>
+                    <span className="text-xs font-black text-purple-950 dark:text-white block">
+                      Devolver produtos não retirados ao estoque
+                    </span>
+                    <span className="text-[10px] font-bold text-gray-500 dark:text-purple-300">
+                      Soma novamente {unclaimedSummaryStats.unclaimedUnits} un. ao estoque disponível da cantina.
+                    </span>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-3 cursor-pointer pt-2 border-t border-gray-200/70 dark:border-purple-900/40">
+                  <input
+                    type="checkbox"
+                    checked={deductValueOnUnclaimed}
+                    onChange={(e) => setDeductValueOnUnclaimed(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 accent-purple-900 rounded"
+                  />
+                  <div>
+                    <span className="text-xs font-black text-purple-950 dark:text-white block">
+                      Descontar não retirados do valor do pedido/fiado
+                    </span>
+                    <span className="text-[10px] font-bold text-gray-500 dark:text-purple-300">
+                      {unclaimedModalSale.status === 'pago'
+                        ? `Pedido já pago (${unclaimedModalSale.forma_pagamento.toUpperCase()}). Marque apenas se houve devolução do valor.`
+                        : unclaimedSummaryStats.deliveredValue <= 0
+                        ? 'Nenhum item foi retirado: o pedido será cancelado (R$ 0,00) e não ficará como dívida no fiado.'
+                        : `Atualiza o valor cobrado no fiado de R$ ${unclaimedSummaryStats.totalOriginal.toFixed(2)} para R$ ${unclaimedSummaryStats.deliveredValue.toFixed(2)}.`}
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              {/* Motivo Opcional */}
+              <div>
+                <label className="text-[10px] font-black uppercase text-purple-900 dark:text-purple-300 tracking-wider block mb-1.5">
+                  Motivo (opcional)
+                </label>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {QUICK_UNCLAIMED_REASONS.map((reason) => (
+                    <button
+                      key={reason}
+                      type="button"
+                      onClick={() => setUnclaimedReason(reason)}
+                      className={`px-2.5 py-1 rounded-xl text-[10px] font-black uppercase transition-all ${
+                        unclaimedReason === reason
+                          ? 'bg-purple-900 text-white'
+                          : 'bg-gray-100 dark:bg-[#20143a] text-gray-600 dark:text-purple-300'
+                      }`}
+                    >
+                      {reason}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  value={unclaimedReason}
+                  onChange={(e) => setUnclaimedReason(e.target.value)}
+                  placeholder="Ex: Cliente foi embora antes de retirar..."
+                  className="w-full bg-gray-50 dark:bg-[#20143a] border border-gray-200 dark:border-purple-900 rounded-xl px-3.5 py-2.5 text-xs font-bold text-purple-950 dark:text-white outline-none focus:border-purple-600"
+                />
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-gray-100 dark:border-purple-900/30 flex flex-col sm:flex-row gap-2">
+              <button
+                type="button"
+                disabled={isSubmittingUnclaimed}
+                onClick={() => setUnclaimedModalSale(null)}
+                className="sm:w-32 py-3.5 rounded-2xl bg-gray-100 dark:bg-purple-950 text-gray-700 dark:text-purple-200 font-black text-xs uppercase"
+              >
+                Voltar
+              </button>
+              <button
+                type="button"
+                disabled={isSubmittingUnclaimed}
+                onClick={handleConfirmUnclaimedFinalize}
+                className="flex-1 py-3.5 px-5 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50"
+              >
+                <i className="fa-solid fa-check-double"></i>
+                {isSubmittingUnclaimed
+                  ? 'Finalizando...'
+                  : unclaimedSummaryStats.unclaimedUnits === 0
+                  ? 'Concluir Entrega Total'
+                  : 'Finalizar KDS c/ Não Retirado'}
+              </button>
+            </div>
           </div>
         </div>
       )}

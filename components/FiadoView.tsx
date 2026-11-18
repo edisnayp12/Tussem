@@ -28,6 +28,62 @@ export interface FiadoGroup {
   isConcluded?: boolean;
 }
 
+const getCustomerGroupKey = (sale: Sale): string => {
+  const normPhone = normalizePhone(sale.telefone_comprador || (sale as any).telefone_limpo);
+  const rawNome = sale.cliente_nome?.trim();
+  const nome = rawNome && rawNome.length > 0 ? rawNome : 'Sem Nome';
+  if (normPhone.length >= 8) return `tel_${normPhone}`;
+  if (nome !== 'Sem Nome') return `nome_${nome.toLowerCase()}`;
+  return `venda_${sale.id}`;
+};
+
+const getFiadoSaleItemStatus = (sale: Sale, item: SaleItem) => {
+  const qty = Math.max(1, Number(item.quantidade) || 1);
+  const naoRetirada = Math.min(qty, Math.max(0, Number(item.quantidade_nao_retirada) || 0));
+  const isReserva = sale.tipo_pedido === 'reserva';
+  const entregue = isReserva
+    ? item.quantidade_entregue !== undefined
+      ? Math.min(qty - naoRetirada, Math.max(0, Number(item.quantidade_entregue) || 0))
+      : sale.status_entrega === 'entregue'
+      ? Math.max(0, qty - naoRetirada)
+      : 0
+    : Math.max(0, qty - naoRetirada);
+  const faltaRetirar =
+    isReserva && sale.status_entrega !== 'entregue'
+      ? Math.max(0, qty - entregue - naoRetirada)
+      : 0;
+  const activeQty = Math.max(0, qty - naoRetirada);
+  const unitPrice = Number(item.preco_unitario) || 0;
+
+  return {
+    qty,
+    naoRetirada,
+    entregue,
+    faltaRetirar,
+    activeQty,
+    unitPrice,
+    activeSubtotal: activeQty * unitPrice,
+    originalSubtotal: qty * unitPrice
+  };
+};
+
+const getSalesItemBreakdownSummary = (salesList: Sale[]) => {
+  let totalItemsCount = 0;
+  let totalFaltaRetirar = 0;
+  let totalNaoRetirada = 0;
+
+  salesList.forEach((sale) => {
+    (sale.itens || []).forEach((item) => {
+      const info = getFiadoSaleItemStatus(sale, item);
+      totalItemsCount += info.qty;
+      totalFaltaRetirar += info.faltaRetirar;
+      totalNaoRetirada += info.naoRetirada;
+    });
+  });
+
+  return { totalItemsCount, totalFaltaRetirar, totalNaoRetirada };
+};
+
 const FiadoView: React.FC<FiadoViewProps> = ({ 
   fiados, 
   allSales = [],
@@ -272,7 +328,16 @@ const FiadoView: React.FC<FiadoViewProps> = ({
     }
 
     const total = group.total.toFixed(2).replace('.', ',');
-    const itemsList = group.sales.flatMap(s => (s.itens || []).map(i => `- ${i.quantidade}x ${i.nome}`)).slice(0, 5).join('\n');
+    const itemsList = group.sales
+      .flatMap(s =>
+        (s.itens || []).map(i => {
+          const st = getFiadoSaleItemStatus(s, i);
+          if (st.activeQty === 0 && st.naoRetirada > 0) return `- ${st.qty}x ${i.nome} (não retirado)`;
+          if (st.faltaRetirar > 0) return `- ${st.qty}x ${i.nome} (falta retirar ${st.faltaRetirar})`;
+          return `- ${st.activeQty}x ${i.nome}`;
+        })
+      )
+      .join('\n');
     const oldestSale = Math.min(...group.sales.map(s => new Date(s.created_at).getTime()));
     const days = Math.max(1, Math.floor((Date.now() - oldestSale) / (1000 * 60 * 60 * 24)));
 
@@ -449,6 +514,19 @@ const FiadoView: React.FC<FiadoViewProps> = ({
   const quickCartTotal = useMemo(() => {
     return quickCart.reduce((sum, item) => sum + (item.subtotal || 0), 0);
   }, [quickCart]);
+
+  // Reservas ainda em andamento no KDS agrupadas por cliente (para mostrar na aba de fiados mesmo se não forem fiado)
+  const pendingKdsReservasByCustomer = useMemo(() => {
+    const map: Record<string, Sale[]> = {};
+    allSales.forEach((s) => {
+      if (s.tipo_pedido === 'reserva' && s.status !== 'cancelado' && s.status_entrega !== 'entregue') {
+        const key = getCustomerGroupKey(s);
+        if (!map[key]) map[key] = [];
+        map[key].push(s);
+      }
+    });
+    return map;
+  }, [allSales]);
 
   // Handle Pix Generation no modal de quitação
   useEffect(() => {
@@ -644,12 +722,27 @@ const FiadoView: React.FC<FiadoViewProps> = ({
       const dataStr = formatSafeDate(sale.created_at);
       const horaStr = formatSafeTime(sale.created_at);
       const tipoLabel = sale.tipo_pedido === 'reserva' ? ' [Reserva]' : ' [Balcão PDV]';
+      const hasUnclaimed = Boolean(
+        sale.possui_nao_retirado || (sale.itens || []).some(it => (it.quantidade_nao_retirada || 0) > 0)
+      );
 
       detalhesText += `\n🗓 *${dataStr} às ${horaStr}*${tipoLabel}\n`;
+      if (hasUnclaimed) {
+        detalhesText += `_(Reserva retirada parcialmente — cobrando somente os itens retirados)_\n`;
+      }
       sale.itens?.forEach(item => {
-        detalhesText += `- ${item.quantidade}x ${item.nome}\n`;
+        const st = getFiadoSaleItemStatus(sale, item);
+        const suffix =
+          st.naoRetirada > 0 && st.activeQty === 0
+            ? ' (não retirado - não cobrado)'
+            : st.naoRetirada > 0
+            ? ` (${st.activeQty} retirado / ${st.naoRetirada} não retirado - cobrado R$ ${st.activeSubtotal.toFixed(2).replace('.', ',')})`
+            : st.faltaRetirar > 0
+            ? ` (falta retirar ${st.faltaRetirar})`
+            : '';
+        detalhesText += `- ${st.qty}x ${item.nome}${suffix}\n`;
       });
-      detalhesText += `_(Subtotal: R$ ${sale.valor_total.toFixed(2).replace('.', ',')})_\n`;
+      detalhesText += `_(Cobrado: R$ ${sale.valor_total.toFixed(2).replace('.', ',')})_\n`;
     });
 
     let pixInfo = '';
@@ -927,6 +1020,18 @@ const FiadoView: React.FC<FiadoViewProps> = ({
           {groupedFiados.map(group => {
             const hasPhone = Boolean(group.telefone && group.telefone.replace(/\D/g, '').length >= 8);
             const isSemNome = group.nome === 'Sem Nome';
+            const groupSummary = getSalesItemBreakdownSummary(group.sales);
+            const groupSaleIds = new Set(group.sales.map(s => s.id));
+            const extraPendingReservas = (pendingKdsReservasByCustomer[group.key] || []).filter(
+              s => !groupSaleIds.has(s.id)
+            );
+            const extraMissingUnits = extraPendingReservas.reduce((acc, s) => {
+              return acc + (s.itens || []).reduce((sum, it) => sum + getFiadoSaleItemStatus(s, it).faltaRetirar, 0);
+            }, 0);
+            const totalMissingReservaUnits = groupSummary.totalFaltaRetirar + extraMissingUnits;
+            const sortedSales = [...group.sales].sort(
+              (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            );
 
             return (
               <div 
@@ -934,50 +1039,221 @@ const FiadoView: React.FC<FiadoViewProps> = ({
                 className="bg-white dark:bg-[#160e2b] p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-purple-900/40 hover:border-purple-300 dark:hover:border-purple-600 hover:shadow-md transition-all flex flex-col justify-between relative group overflow-hidden"
               >
                 {/* Top Card Bar */}
-                <div className="flex justify-between items-start mb-3">
-                  <div className="flex-1 pr-2">
-                    <div className="flex items-center gap-2 flex-wrap mb-1">
-                      <h3 className="font-black text-purple-950 dark:text-white uppercase text-lg leading-tight">
-                        {group.nome}
-                      </h3>
-                      {isSemNome && (
-                        <span className="bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[8px] font-black uppercase px-2 py-0.5 rounded-full">
-                          Sem Nome
-                        </span>
+                <div>
+                  <div className="flex justify-between items-start mb-3">
+                    <div className="flex-1 pr-2">
+                      <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <h3 className="font-black text-purple-950 dark:text-white uppercase text-lg leading-tight">
+                          {group.nome}
+                        </h3>
+                        {isSemNome && (
+                          <span className="bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[8px] font-black uppercase px-2 py-0.5 rounded-full">
+                            Sem Nome
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                        {group.sales.length} {group.sales.length === 1 ? 'compra pendente' : 'compras pendentes'}
+                      </p>
+                    </div>
+
+                    <div className="bg-red-50 dark:bg-red-950/60 text-red-600 dark:text-red-400 px-3.5 py-1.5 rounded-2xl font-black text-sm whitespace-nowrap border border-red-100 dark:border-red-900/40">
+                      R$ {group.total.toFixed(2)}
+                    </div>
+                  </div>
+
+                  {/* Informação de Contato / WhatsApp */}
+                  <div className="my-3 py-2 px-3 bg-gray-50 dark:bg-[#20143a] rounded-2xl flex items-center justify-between">
+                    {hasPhone ? (
+                      <div className="flex items-center gap-2 text-xs font-bold text-green-700 dark:text-green-400">
+                        <i className="fa-brands fa-whatsapp text-green-600 dark:text-green-400 text-base"></i>
+                        <span>{formatPhone(group.telefone || '')}</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 text-[10px] font-bold text-amber-700 dark:text-amber-400">
+                        <i className="fa-solid fa-triangle-exclamation text-amber-500"></i>
+                        <span>Sem WhatsApp cadastrado</span>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={(e) => openEditModal(group, e)}
+                      title="Editar ou incluir número de telefone"
+                      className="bg-white dark:bg-purple-900/50 hover:bg-purple-50 dark:hover:bg-purple-800/60 text-purple-700 dark:text-purple-200 border border-purple-200 dark:border-purple-700 px-2.5 py-1 rounded-xl text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-xs transition-all active:scale-95"
+                    >
+                      <i className="fa-solid fa-pen-to-square"></i>
+                      {hasPhone && !isSemNome ? 'Editar' : 'Completar Tel'}
+                    </button>
+                  </div>
+
+                  {/* Lista Completa de Itens Comprados & Falta da Reserva */}
+                  <div className="bg-gray-50 dark:bg-[#20143a] rounded-2xl p-3 border border-gray-100 dark:border-purple-900/30 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                      <span className="text-[9px] font-black uppercase tracking-wider text-purple-900 dark:text-purple-300 flex items-center gap-1.5">
+                        <i className="fa-solid fa-bag-shopping text-purple-500"></i>
+                        Itens Comprados ({groupSummary.totalItemsCount})
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1">
+                        {totalMissingReservaUnits > 0 && (
+                          <span className="bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 text-[8px] font-black uppercase px-2 py-0.5 rounded-full">
+                            Falta retirar {totalMissingReservaUnits} un.
+                          </span>
+                        )}
+                        {groupSummary.totalNaoRetirada > 0 && (
+                          <span className="bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 text-[8px] font-black uppercase px-2 py-0.5 rounded-full">
+                            {groupSummary.totalNaoRetirada} não retirado(s)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="max-h-52 overflow-y-auto space-y-2 pr-0.5">
+                      {groupSummary.totalNaoRetirada > 0 && (
+                        <div className="bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800/70 rounded-xl px-2.5 py-2 text-[9px] font-black uppercase text-rose-700 dark:text-rose-300 flex items-center gap-1.5">
+                          <i className="fa-solid fa-circle-info"></i>
+                          <span>Não foi retirado todos os produtos • Cobrando somente o retirado</span>
+                        </div>
                       )}
+                      {sortedSales.map((sale) => {
+                        const isReserva = sale.tipo_pedido === 'reserva';
+                        const hasSaleUnclaimed = Boolean(
+                          sale.possui_nao_retirado || (sale.itens || []).some(it => (it.quantidade_nao_retirada || 0) > 0)
+                        );
+                        return (
+                          <div
+                            key={sale.id}
+                            className={`bg-white dark:bg-[#160e2b] rounded-xl p-2.5 border space-y-1.5 ${
+                              hasSaleUnclaimed
+                                ? 'border-rose-200 dark:border-rose-900/50'
+                                : 'border-gray-100 dark:border-purple-900/40'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2 text-[9px] font-black uppercase border-b border-gray-100 dark:border-purple-900/30 pb-1">
+                              <span className="flex items-center gap-1.5 text-gray-500 dark:text-purple-300 flex-wrap">
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[8px] font-black ${
+                                    isReserva
+                                      ? 'bg-purple-100 dark:bg-purple-900/70 text-purple-800 dark:text-purple-200'
+                                      : 'bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-200'
+                                  }`}
+                                >
+                                  {isReserva ? 'Reserva' : 'Balcão'}
+                                </span>
+                                {hasSaleUnclaimed && (
+                                  <span className="px-1.5 py-0.5 rounded text-[8px] font-black bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300">
+                                    Não retirou tudo
+                                  </span>
+                                )}
+                                <span>
+                                  {formatSafeDate(sale.created_at)} • {formatSafeTime(sale.created_at)}
+                                </span>
+                              </span>
+                              <div className="text-right shrink-0">
+                                {sale.valor_original !== undefined && sale.valor_original > sale.valor_total && (
+                                  <span className="text-[8px] text-gray-400 line-through mr-1">
+                                    R$ {Number(sale.valor_original).toFixed(2)}
+                                  </span>
+                                )}
+                                <span className="text-purple-950 dark:text-white font-black">
+                                  R$ {(Number(sale.valor_total) || 0).toFixed(2)}
+                                </span>
+                              </div>
+                            </div>
+
+                            {sale.itens && sale.itens.length > 0 ? (
+                              <div className="space-y-1">
+                                {sale.itens.map((item, idx) => {
+                                  const st = getFiadoSaleItemStatus(sale, item);
+                                  return (
+                                    <div key={idx} className="flex items-start justify-between gap-2 text-[11px]">
+                                      <div className="min-w-0 flex-1">
+                                        <span
+                                          className={`font-bold uppercase block leading-snug ${
+                                            st.activeQty === 0 && st.naoRetirada > 0
+                                              ? 'line-through text-gray-400'
+                                              : 'text-gray-800 dark:text-gray-200'
+                                          }`}
+                                        >
+                                          {st.qty}x {item.nome || 'Produto'}
+                                        </span>
+                                        <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                                          {st.faltaRetirar > 0 && (
+                                            <span className="text-[8px] font-black uppercase bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 px-1.5 py-0.5 rounded">
+                                              {st.entregue > 0
+                                                ? `${st.entregue}/${st.qty} retirado • Falta ${st.faltaRetirar}`
+                                                : `Falta retirar ${st.faltaRetirar} de ${st.qty}`}
+                                            </span>
+                                          )}
+                                          {st.naoRetirada > 0 && (
+                                            <span className="text-[8px] font-black uppercase bg-rose-100 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 px-1.5 py-0.5 rounded">
+                                              {st.activeQty > 0
+                                                ? `Retirado ${st.activeQty}/${st.qty} • ${st.naoRetirada} não retirado(s)`
+                                                : `Não retirado (0/${st.qty}) • Não cobrado`}
+                                            </span>
+                                          )}
+                                          {isReserva && st.faltaRetirar === 0 && st.naoRetirada === 0 && (
+                                            <span className="text-[8px] font-black uppercase bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded">
+                                              Retirado
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      <div className="text-right shrink-0">
+                                        <span className="font-black text-gray-900 dark:text-white">
+                                          R$ {st.activeSubtotal.toFixed(2)}
+                                        </span>
+                                        {st.naoRetirada > 0 && st.originalSubtotal > st.activeSubtotal && (
+                                          <span className="block text-[9px] text-gray-400 line-through">
+                                            R$ {st.originalSubtotal.toFixed(2)}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <p className="text-[10px] font-bold text-gray-400 italic">
+                                Consumo avulso sem itens detalhados
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {extraPendingReservas.map((resSale) => (
+                        <div
+                          key={resSale.id}
+                          className="bg-amber-50/70 dark:bg-amber-950/30 rounded-xl p-2.5 border border-amber-200 dark:border-amber-800/60 space-y-1"
+                        >
+                          <div className="flex items-center justify-between text-[9px] font-black uppercase text-amber-800 dark:text-amber-300">
+                            <span>Reserva no KDS ({resSale.forma_pagamento})</span>
+                            <span>{formatSafeTime(resSale.created_at)}</span>
+                          </div>
+                          {(resSale.itens || []).map((item, idx) => {
+                            const st = getFiadoSaleItemStatus(resSale, item);
+                            return (
+                              <div key={idx} className="flex items-center justify-between gap-2 text-[10px] font-bold">
+                                <span className="text-amber-950 dark:text-amber-100 uppercase truncate">
+                                  {st.qty}x {item.nome}
+                                </span>
+                                {st.faltaRetirar > 0 ? (
+                                  <span className="text-[8px] font-black uppercase bg-amber-200/80 dark:bg-amber-900 text-amber-900 dark:text-amber-200 px-1.5 py-0.5 rounded shrink-0">
+                                    Falta {st.faltaRetirar}
+                                  </span>
+                                ) : (
+                                  <span className="text-[8px] font-black uppercase text-emerald-700 dark:text-emerald-300 shrink-0">
+                                    Retirado
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ))}
                     </div>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-                      {group.sales.length} {group.sales.length === 1 ? 'compra pendente' : 'compras pendentes'}
-                    </p>
                   </div>
-
-                  <div className="bg-red-50 dark:bg-red-950/60 text-red-600 dark:text-red-400 px-3.5 py-1.5 rounded-2xl font-black text-sm whitespace-nowrap border border-red-100 dark:border-red-900/40">
-                    R$ {group.total.toFixed(2)}
-                  </div>
-                </div>
-
-                {/* Informação de Contato / WhatsApp */}
-                <div className="my-3 py-2 px-3 bg-gray-50 dark:bg-[#20143a] rounded-2xl flex items-center justify-between">
-                  {hasPhone ? (
-                    <div className="flex items-center gap-2 text-xs font-bold text-green-700 dark:text-green-400">
-                      <i className="fa-brands fa-whatsapp text-green-600 dark:text-green-400 text-base"></i>
-                      <span>{formatPhone(group.telefone || '')}</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 text-[10px] font-bold text-amber-700 dark:text-amber-400">
-                      <i className="fa-solid fa-triangle-exclamation text-amber-500"></i>
-                      <span>Sem WhatsApp cadastrado</span>
-                    </div>
-                  )}
-
-                  <button
-                    onClick={(e) => openEditModal(group, e)}
-                    title="Editar ou incluir número de telefone"
-                    className="bg-white dark:bg-purple-900/50 hover:bg-purple-50 dark:hover:bg-purple-800/60 text-purple-700 dark:text-purple-200 border border-purple-200 dark:border-purple-700 px-2.5 py-1 rounded-xl text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-xs transition-all active:scale-95"
-                  >
-                    <i className="fa-solid fa-pen-to-square"></i>
-                    {hasPhone && !isSemNome ? 'Editar' : 'Completar Tel'}
-                  </button>
                 </div>
 
                 {/* Botões de Ação do Card */}
@@ -1143,16 +1419,66 @@ const FiadoView: React.FC<FiadoViewProps> = ({
                       </button>
                     </div>
 
-                    <div className="bg-gray-50 dark:bg-[#20143a] p-3 rounded-2xl text-xs space-y-1 mb-3 max-h-24 overflow-y-auto">
-                      <span className="text-[9px] font-black uppercase text-gray-400 block mb-1">
-                        Últimos itens quitados:
+                    <div className="bg-gray-50 dark:bg-[#20143a] p-3 rounded-2xl text-xs space-y-2 mb-3 max-h-48 overflow-y-auto border border-gray-100 dark:border-purple-900/30">
+                      <span className="text-[9px] font-black uppercase text-purple-900 dark:text-purple-300 block">
+                        Todos os Itens Comprados ({getSalesItemBreakdownSummary(group.sales).totalItemsCount}):
                       </span>
-                      {group.sales.flatMap(s => s.itens || []).slice(0, 4).map((it, idx) => (
-                        <div key={idx} className="flex justify-between items-center text-[11px] font-bold text-gray-700 dark:text-gray-300">
-                          <span className="truncate pr-2">{it.quantidade}x {it.nome}</span>
-                          <span className="text-gray-900 dark:text-white font-black">R$ {((it.preco_unitario || 0) * it.quantidade).toFixed(2)}</span>
-                        </div>
-                      ))}
+                      {group.sales.map((sale) => {
+                        const hasSaleUnclaimed = Boolean(
+                          sale.possui_nao_retirado || (sale.itens || []).some(it => (it.quantidade_nao_retirada || 0) > 0)
+                        );
+                        return (
+                          <div key={sale.id} className="bg-white dark:bg-[#160e2b] rounded-xl p-2 border border-gray-100 dark:border-purple-900/30 space-y-1">
+                            <div className="flex justify-between items-center text-[9px] font-black uppercase text-gray-400 border-b border-gray-100 dark:border-purple-900/20 pb-1 gap-1.5">
+                              <span className="flex items-center gap-1 flex-wrap">
+                                <span>{sale.tipo_pedido === 'reserva' ? 'Reserva' : 'Balcão'} • {formatSafeDate(sale.created_at)}</span>
+                                {hasSaleUnclaimed && (
+                                  <span className="bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 px-1.5 py-0.5 rounded text-[8px]">
+                                    Não retirou tudo
+                                  </span>
+                                )}
+                              </span>
+                              <span className="shrink-0">
+                                {sale.valor_original !== undefined && sale.valor_original > sale.valor_total && (
+                                  <span className="text-[8px] text-gray-400 line-through mr-1">
+                                    R$ {Number(sale.valor_original).toFixed(2)}
+                                  </span>
+                                )}
+                                <span className="text-emerald-700 dark:text-emerald-300">
+                                  R$ {(Number(sale.valor_total) || 0).toFixed(2)}
+                                </span>
+                              </span>
+                            </div>
+                            {(sale.itens || []).map((it, idx) => {
+                              const st = getFiadoSaleItemStatus(sale, it);
+                              return (
+                                <div key={idx} className="flex justify-between items-start gap-2 text-[11px] font-bold text-gray-700 dark:text-gray-300">
+                                  <div className="min-w-0 flex-1">
+                                    <span className={`block truncate ${st.activeQty === 0 && st.naoRetirada > 0 ? 'line-through text-gray-400' : ''}`}>
+                                      {st.qty}x {it.nome}
+                                    </span>
+                                    {st.naoRetirada > 0 && (
+                                      <span className="text-[8px] font-black uppercase text-rose-600 dark:text-rose-400 block">
+                                        {st.activeQty > 0
+                                          ? `Retirado ${st.activeQty}/${st.qty} • ${st.naoRetirada} não retirado(s)`
+                                          : `Não retirado (0/${st.qty}) • Não cobrado`}
+                                      </span>
+                                    )}
+                                    {st.faltaRetirar > 0 && (
+                                      <span className="text-[8px] font-black uppercase text-amber-600 dark:text-amber-400 block">
+                                        Falta retirar {st.faltaRetirar} no KDS
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-gray-900 dark:text-white font-black shrink-0">
+                                    R$ {st.activeSubtotal.toFixed(2)}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -2069,7 +2395,7 @@ const FiadoView: React.FC<FiadoViewProps> = ({
           onClick={() => setSelectedGroup(null)}
         >
           <div 
-            className="bg-white dark:bg-[#160e2b] rounded-[40px] p-8 w-full max-w-sm shadow-2xl my-auto animate-in zoom-in-95 border border-purple-100 dark:border-purple-900/40" 
+            className="bg-white dark:bg-[#160e2b] rounded-[40px] p-6 sm:p-8 w-full max-w-md shadow-2xl my-auto animate-in zoom-in-95 border border-purple-100 dark:border-purple-900/40" 
             onClick={e => e.stopPropagation()}
           >
             <h3 className="text-2xl font-black text-purple-950 dark:text-white uppercase text-center mb-1">
@@ -2111,7 +2437,25 @@ const FiadoView: React.FC<FiadoViewProps> = ({
               </button>
             </div>
             
-            <div className="bg-gray-50 dark:bg-[#20143a] rounded-3xl p-4 mb-5 max-h-40 overflow-y-auto border border-gray-100 dark:border-purple-900/30">
+            {getSalesItemBreakdownSummary(selectedGroup.sales).totalFaltaRetirar > 0 && (
+              <div className="mb-3 bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/60 rounded-2xl p-3 flex items-center gap-2 text-[10px] font-black uppercase text-amber-800 dark:text-amber-300">
+                <i className="fa-solid fa-clock text-amber-600"></i>
+                <span>
+                  Atenção: ainda falta retirar {getSalesItemBreakdownSummary(selectedGroup.sales).totalFaltaRetirar} un. da reserva no KDS.
+                </span>
+              </div>
+            )}
+
+            {getSalesItemBreakdownSummary(selectedGroup.sales).totalNaoRetirada > 0 && (
+              <div className="mb-3 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800/60 rounded-2xl p-3 flex items-center gap-2 text-[10px] font-black uppercase text-rose-700 dark:text-rose-300">
+                <i className="fa-solid fa-box-open text-rose-600"></i>
+                <span>
+                  Não retirou toda a reserva: cobrando somente os itens efetivamente retirados.
+                </span>
+              </div>
+            )}
+
+            <div className="bg-gray-50 dark:bg-[#20143a] rounded-3xl p-4 mb-5 max-h-60 overflow-y-auto border border-gray-100 dark:border-purple-900/30">
               {selectedGroup.sales.map((sale) => (
                 <div key={sale.id} className="mb-4 last:mb-0 border-b border-gray-200 dark:border-purple-900/30 last:border-0 pb-4 last:pb-0">
                   <p className="text-[10px] font-black uppercase text-gray-400 mb-2 flex justify-between items-center">
@@ -2124,17 +2468,37 @@ const FiadoView: React.FC<FiadoViewProps> = ({
                         {sale.tipo_pedido === 'reserva' ? 'Reserva' : 'PDV'}
                       </span>
                       <span>
-                        {new Date(sale.created_at).toLocaleDateString()} às {new Date(sale.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {formatSafeDate(sale.created_at)} às {formatSafeTime(sale.created_at)}
                       </span>
                     </span>
-                    <span className="font-bold text-gray-700 dark:text-gray-300">R$ {sale.valor_total.toFixed(2)}</span>
+                    <span className="font-bold text-gray-700 dark:text-gray-300">R$ {(Number(sale.valor_total) || 0).toFixed(2)}</span>
                   </p>
-                  <div className="space-y-1">
-                    {sale.itens?.map((item, i) => (
-                      <div key={i} className="flex justify-between items-center text-xs">
-                        <span className="font-bold text-gray-700 dark:text-gray-300 uppercase">{item.quantidade}x {item.nome}</span>
-                      </div>
-                    ))}
+                  <div className="space-y-1.5">
+                    {sale.itens?.map((item, i) => {
+                      const st = getFiadoSaleItemStatus(sale, item);
+                      return (
+                        <div key={i} className="flex justify-between items-start gap-2 text-xs">
+                          <div className="min-w-0">
+                            <span className={`font-bold uppercase block ${st.activeQty === 0 && st.naoRetirada > 0 ? 'line-through text-gray-400' : 'text-gray-700 dark:text-gray-300'}`}>
+                              {st.qty}x {item.nome}
+                            </span>
+                            {st.faltaRetirar > 0 && (
+                              <span className="text-[9px] font-black uppercase text-amber-600 dark:text-amber-300 block">
+                                Falta retirar {st.faltaRetirar} de {st.qty}
+                              </span>
+                            )}
+                            {st.naoRetirada > 0 && (
+                              <span className="text-[9px] font-black uppercase text-rose-600 dark:text-rose-400 block">
+                                {st.naoRetirada} não retirado(s)
+                              </span>
+                            )}
+                          </div>
+                          <span className="font-black text-gray-900 dark:text-white shrink-0">
+                            R$ {st.activeSubtotal.toFixed(2)}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               ))}

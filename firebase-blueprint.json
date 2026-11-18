@@ -39,13 +39,17 @@
         "operador_nome": { "type": "string" },
         "status": { "type": "string", "enum": ["pago", "pendente", "cancelado"] },
         "valor_total": { "type": "number" },
+        "valor_original": { "type": "number" },
         "valor_recebido": { "type": "number" },
         "troco": { "type": "number" },
         "forma_pagamento": { "type": "string" },
+        "forma_pagamento_original": { "type": "string" },
         "created_at": { "type": "string" },
         "cliente_nome": { "type": "string" },
         "tipo_pedido": { "type": "string", "enum": ["balcao", "reserva"] },
         "status_entrega": { "type": "string", "enum": ["pendente", "parcial", "entregue"] },
+        "possui_nao_retirado": { "type": "boolean" },
+        "motivo_nao_retirado": { "type": "string" },
         "pixInteractionId": { "type": "string" }
       },
       "required": ["status", "valor_total", "forma_pagamento", "created_at"]
@@ -59,6 +63,7 @@
         "nome": { "type": "string" },
         "quantidade": { "type": "number" },
         "quantidade_entregue": { "type": "number" },
+        "quantidade_nao_retirada": { "type": "number" },
         "preco_unitario": { "type": "number" },
         "subtotal": { "type": "number" }
       },

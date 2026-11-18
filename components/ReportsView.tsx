@@ -87,6 +87,7 @@ const ReportsView: React.FC<ReportsViewProps> = ({
 
   const stats = useMemo(() => {
     return filteredSales.reduce((acc, s) => {
+      if (s.status === 'cancelado') return acc;
       const val = Number(s.valor_total) || 0;
       acc.total += val;
       if (s.status === 'pago') {
@@ -99,7 +100,8 @@ const ReportsView: React.FC<ReportsViewProps> = ({
         s.itens.forEach(it => {
           const itemNameKey = (it.nome || '').trim().toLowerCase();
           const unitCost = it.preco_custo || productCostMap[it.produto_id] || (itemNameKey ? productCostMap[itemNameKey] : 0) || 0;
-          const qty = it.quantidade || 1;
+          const unclaimed = Math.max(0, Number(it.quantidade_nao_retirada) || 0);
+          const qty = Math.max(0, (it.quantidade || 1) - unclaimed);
           acc.custoTotal += unitCost * qty;
         });
       }
@@ -859,7 +861,18 @@ const ReportsView: React.FC<ReportsViewProps> = ({
                       <td className="px-6 py-4">
                         <div className="text-[10px] font-black text-gray-700 dark:text-gray-200 uppercase">{s.cliente_nome || 'Balcão'}</div>
                         <div className="flex items-center gap-2 mt-0.5">
-                          <span className={`text-[8px] font-black uppercase ${s.status === 'pago' ? 'text-green-500' : 'text-red-500'}`}>{s.status}</span>
+                          <span className={`text-[8px] font-black uppercase ${
+                            s.status === 'pago'
+                              ? 'text-green-500'
+                              : s.status === 'cancelado'
+                              ? 'text-gray-400'
+                              : 'text-red-500'
+                          }`}>{s.status === 'cancelado' ? 'Cancelado' : s.status}</span>
+                          {s.possui_nao_retirado && (
+                            <span className="text-[8px] font-black uppercase bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 px-1.5 py-0.5 rounded">
+                              c/ Não Retirado
+                            </span>
+                          )}
                           {s.telefone_comprador && (
                             <span className="text-[9px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                               <i className="fa-brands fa-whatsapp"></i> {formatPhone(s.telefone_comprador)}
@@ -959,13 +972,36 @@ const ReportsView: React.FC<ReportsViewProps> = ({
                       </span>
                     </div>
 
-                    <div className="space-y-1">
-                      {s.itens?.map((it, idx) => (
-                        <div key={idx} className="flex justify-between items-center text-gray-700 dark:text-gray-300 text-[11px] font-bold">
-                          <span>{it.quantidade}x {it.nome}</span>
-                          <span>R$ {((it.preco_unitario || 0) * it.quantidade).toFixed(2)}</span>
-                        </div>
-                      ))}
+                    <div className="space-y-1.5">
+                      {s.itens?.map((it, idx) => {
+                        const qty = Math.max(1, Number(it.quantidade) || 1);
+                        const unret = Math.min(qty, Math.max(0, Number(it.quantidade_nao_retirada) || 0));
+                        const activeQty = Math.max(0, qty - unret);
+                        const deliv = s.tipo_pedido === 'reserva'
+                          ? (it.quantidade_entregue !== undefined ? Math.min(qty - unret, Math.max(0, Number(it.quantidade_entregue) || 0)) : (s.status_entrega === 'entregue' ? activeQty : 0))
+                          : activeQty;
+                        const falta = s.tipo_pedido === 'reserva' && s.status_entrega !== 'entregue' ? Math.max(0, qty - deliv - unret) : 0;
+                        return (
+                          <div key={idx} className="flex justify-between items-start gap-2 text-gray-700 dark:text-gray-300 text-[11px] font-bold">
+                            <div className="min-w-0">
+                              <span className={activeQty === 0 && unret > 0 ? 'line-through text-gray-400' : ''}>
+                                {qty}x {it.nome}
+                              </span>
+                              {falta > 0 && (
+                                <span className="block text-[9px] font-black uppercase text-amber-600 dark:text-amber-300">
+                                  Falta retirar {falta} de {qty}
+                                </span>
+                              )}
+                              {unret > 0 && (
+                                <span className="block text-[9px] font-black uppercase text-rose-600 dark:text-rose-400">
+                                  {unret} não retirado(s)
+                                </span>
+                              )}
+                            </div>
+                            <span className="shrink-0">R$ {((it.preco_unitario || 0) * activeQty).toFixed(2)}</span>
+                          </div>
+                        );
+                      })}
                     </div>
 
                     <div className="pt-2 border-t border-gray-200 dark:border-purple-900/40 flex justify-between items-center font-black text-gray-900 dark:text-white">
@@ -1018,19 +1054,41 @@ const ReportsView: React.FC<ReportsViewProps> = ({
                 <span>{formatSafeTime(selectedSale.created_at)}</span>
               </p>
               <div className="space-y-2">
-                {selectedSale.itens?.map((item, idx) => (
-                  <div key={idx} className="flex justify-between items-center text-xs">
-                    <span className="font-bold text-gray-700 dark:text-gray-300 uppercase">{item.quantidade}x {item.nome}</span>
-                    <span className="font-black text-gray-900 dark:text-white">R$ {((item.preco_unitario || 0) * item.quantidade).toFixed(2)}</span>
-                  </div>
-                ))}
+                {selectedSale.itens?.map((item, idx) => {
+                  const unclaimed = Math.max(0, Number(item.quantidade_nao_retirada) || 0);
+                  const qty = Math.max(1, Number(item.quantidade) || 1);
+                  const activeQty = Math.max(0, qty - unclaimed);
+                  return (
+                    <div key={idx} className="flex justify-between items-center text-xs gap-2">
+                      <div className="min-w-0">
+                        <span className={`font-bold uppercase ${activeQty === 0 ? 'line-through text-gray-400' : 'text-gray-700 dark:text-gray-300'}`}>
+                          {qty}x {item.nome}
+                        </span>
+                        {unclaimed > 0 && (
+                          <span className="block text-[9px] font-black uppercase text-rose-600 dark:text-rose-400">
+                            {unclaimed} não retirado(s)
+                          </span>
+                        )}
+                      </div>
+                      <span className="font-black text-gray-900 dark:text-white shrink-0">
+                        R$ {((item.preco_unitario || 0) * activeQty).toFixed(2)}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
             <div className="bg-purple-50 dark:bg-purple-950/60 p-4 rounded-3xl flex justify-between items-center mb-4">
               <div>
                 <p className="text-[9px] font-black text-purple-400 uppercase">Status</p>
-                <p className={`text-sm font-black uppercase ${selectedSale.status === 'pago' ? 'text-green-600' : 'text-red-500'}`}>{selectedSale.status}</p>
+                <p className={`text-sm font-black uppercase ${
+                  selectedSale.status === 'pago'
+                    ? 'text-green-600'
+                    : selectedSale.status === 'cancelado'
+                    ? 'text-gray-500'
+                    : 'text-red-500'
+                }`}>{selectedSale.status}</p>
               </div>
               <div className="text-right">
                 <p className="text-[9px] font-black text-purple-400 uppercase">Forma</p>

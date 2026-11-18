@@ -69,6 +69,7 @@ export interface SaleItem {
   nome?: string; // Virtual para UI
   quantidade: number;
   quantidade_entregue?: number;
+  quantidade_nao_retirada?: number;
   preco_unitario: number;
   preco_custo?: number;
   subtotal: number;
@@ -81,9 +82,11 @@ export interface Sale {
   operador_nome?: string;
   status: 'pago' | 'pendente' | 'cancelado';
   valor_total: number;
+  valor_original?: number;
   valor_recebido?: number;
   troco?: number;
   forma_pagamento: PaymentMethod;
+  forma_pagamento_original?: PaymentMethod;
   pago_com?: PaymentMethod;
   created_at: string;
   itens?: SaleItem[];
@@ -91,6 +94,8 @@ export interface Sale {
   numero_venda?: number; 
   tipo_pedido?: 'balcao' | 'reserva';
   status_entrega?: 'pendente' | 'parcial' | 'entregue';
+  possui_nao_retirado?: boolean;
+  motivo_nao_retirado?: string;
   telefone_comprador?: string;
 }
 

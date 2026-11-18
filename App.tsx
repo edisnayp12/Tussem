@@ -71,8 +71,8 @@ const computePendingFiados = (allSales: Sale[]): Sale[] =>
   allSales.filter(
     (sale) =>
       sale.status === 'pendente' &&
-      ((sale.tipo_pedido === 'reserva' && sale.status_entrega === 'entregue') ||
-        (sale.tipo_pedido !== 'reserva' && sale.forma_pagamento === PaymentMethod.FIADO))
+      (sale.forma_pagamento === PaymentMethod.FIADO ||
+        (sale.tipo_pedido === 'reserva' && sale.status_entrega === 'entregue'))
   );
 
 const AppContent: React.FC = () => {
@@ -526,6 +526,69 @@ const AppContent: React.FC = () => {
     }
   };
 
+  const handleFinalizeKdsWithUnclaimed = async (
+    saleId: string,
+    payload: {
+      itens: any[];
+      restoreStock: boolean;
+      valor_total: number;
+      valor_original?: number;
+      status: 'pago' | 'pendente' | 'cancelado';
+      forma_pagamento?: PaymentMethod;
+      forma_pagamento_original?: PaymentMethod;
+      possui_nao_retirado: boolean;
+      motivo_nao_retirado?: string;
+      logDetalhes?: string;
+    }
+  ) => {
+    setSales((prev) => {
+      const next = prev.map((s) =>
+        s.id === saleId
+          ? {
+              ...s,
+              itens: payload.itens,
+              status_entrega: 'entregue' as const,
+              possui_nao_retirado: payload.possui_nao_retirado,
+              valor_total: payload.valor_total,
+              ...(payload.valor_original !== undefined ? { valor_original: payload.valor_original } : {}),
+              status: payload.status,
+              ...(payload.forma_pagamento ? { forma_pagamento: payload.forma_pagamento } : {}),
+              ...(payload.forma_pagamento_original ? { forma_pagamento_original: payload.forma_pagamento_original } : {}),
+              ...(payload.motivo_nao_retirado ? { motivo_nao_retirado: payload.motivo_nao_retirado } : {})
+            }
+          : s
+      );
+      storageService.saveSales(next);
+      setFiados(computePendingFiados(next));
+      return next;
+    });
+
+    if (payload.restoreStock) {
+      const restoreMap: Record<string, number> = {};
+      (payload.itens || []).forEach((it: any) => {
+        const unclaimed = Math.max(0, Number(it.quantidade_nao_retirada) || 0);
+        if (it.produto_id && unclaimed > 0) {
+          restoreMap[it.produto_id] = (restoreMap[it.produto_id] || 0) + unclaimed;
+        }
+      });
+      if (Object.keys(restoreMap).length > 0) {
+        setProducts((prev) => {
+          const nextProducts = prev.map((p) => {
+            const addQty = restoreMap[p.id];
+            if (!addQty) return p;
+            return { ...p, estoque: (Number(p.estoque) || 0) + addQty };
+          });
+          storageService.saveProducts(nextProducts);
+          return nextProducts;
+        });
+      }
+    }
+
+    if (!saleId.startsWith('LOCAL-')) {
+      await db.finalizeKdsOrder(saleId, payload, currentUser?.nome, currentUser?.id);
+    }
+  };
+
   const currentShift = shifts.find((s) => s.status === 'aberto') || null;
 
   const handleOpenCashShift = async (valorAbertura: number) => {
@@ -892,7 +955,17 @@ const AppContent: React.FC = () => {
             customers={customers}
             products={products} 
             settings={settings} 
-            onPayDebt={(pid, m) => db.payFiado(pid, m, currentUser?.nome, currentUser?.id)} 
+            onPayDebt={async (pid, m) => {
+              setSales((prev) => {
+                const next = prev.map((s) => (s.id === pid ? { ...s, status: 'pago' as const, pago_com: m } : s));
+                storageService.saveSales(next);
+                setFiados(computePendingFiados(next));
+                return next;
+              });
+              if (!pid.startsWith('LOCAL-')) {
+                await db.payFiado(pid, m, currentUser?.nome, currentUser?.id);
+              }
+            }} 
             onUpdateFiadoCustomer={async (saleIds, nome, telefone) => {
               await db.updateFiadoCustomer(saleIds, nome, telefone, currentUser?.nome, currentUser?.id);
             }}
@@ -961,7 +1034,14 @@ const AppContent: React.FC = () => {
             onUpdateSaleContact={handleUpdateSaleContact}
           />
         )}
-        {activeTab === 'kds' && <KdsView sales={sales} onUpdateSale={handleUpdateSale} currentUser={currentUser} />}
+        {activeTab === 'kds' && (
+          <KdsView
+            sales={sales}
+            onUpdateSale={handleUpdateSale}
+            onFinalizeWithUnclaimed={handleFinalizeKdsWithUnclaimed}
+            currentUser={currentUser}
+          />
+        )}
         {activeTab === 'logs' && <LogView logs={logs} />}
         {activeTab === 'config' && (
           <SettingsView 
